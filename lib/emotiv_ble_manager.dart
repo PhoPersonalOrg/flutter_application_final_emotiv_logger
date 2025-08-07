@@ -10,6 +10,10 @@ import 'eeg_file_writer.dart';
 
 
 class EmotivBLEManager {
+  
+  // TODO: get the device serial number dynamically upon connection using the following code:
+  // self.serial_number = bytes(("\x00" * 12),'utf-8') + bytearray.fromhex(str(BT_key[6:8] + BT_key[4:6] + BT_key[2:4] + BT_key[0:2]))
+
 	// UUIDs from your Swift code
 	static const String controlUuid = "81072F40-9F3D-11E3-A9DC-0002A5D5C51B";
 	static const String eegDataUuid = "81072F41-9F3D-11E3-A9DC-0002A5D5C51B"; // UUID of the main data stream with ID 0x10
@@ -36,6 +40,8 @@ class EmotivBLEManager {
 	BluetoothCharacteristic? _motionDataCharacteristic; // 0x42
 
 	final bool _shouldAutoConnectToFirst = false;
+  String? btleDeviceName;
+  Uint8List? serialNumber;
 	bool _isConnected = false;
 	bool _isScanning = false;
 	
@@ -312,6 +318,19 @@ class EmotivBLEManager {
 		}
 	}
 
+
+	// 0x0001 -> start EEG (0x41)
+	// 0x0002 -> start MEMS (0x42)
+	Future<void> _enableBluetoothDataStreams() async {
+		if (_eegDataCharacteristic == null) return;
+
+		// enable EEG
+		await _eegDataCharacteristic!.write(Uint8List.fromList([0x01, 0x00]), withoutResponse: false);
+		print('wrote 0x01');
+
+	}
+
+
 	Future<void> _setupEEGDataCharacteristic(BluetoothCharacteristic characteristic) async {
 		try {
 			// Enable notifications
@@ -411,18 +430,6 @@ class EmotivBLEManager {
 	}
 
 
-	// 0x0001 -> start EEG (0x41)
-	// 0x0002 -> start MEMS (0x42)
-	Future<void> _enableBluetoothDataStreams() async {
-		if (_eegDataCharacteristic == null) return;
-
-		// enable EEG
-		await _eegDataCharacteristic!.write(Uint8List.fromList([0x01, 0x00]), withoutResponse: false);
-		print('wrote 0x01');
-		// enable MEMS / motion
-		await _eegDataCharacteristic!.write(Uint8List.fromList([0x02, 0x00]), withoutResponse: false);
-		print('wrote 0x02');
-	}
 
 
 	void _handleDisconnection() {
