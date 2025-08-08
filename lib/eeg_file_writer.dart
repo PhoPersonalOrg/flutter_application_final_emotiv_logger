@@ -82,7 +82,7 @@ class EEGFileWriter {
 	  _eegDataSink = _eegDataFile!.openWrite();
 
 	  // Write CSV header
-	  _eegDataSink!.writeln('timestamp,channel_1,channel_2,channel_3,channel_4,channel_5,channel_6,channel_7,channel_8,channel_9,channel_10,channel_11,channel_12,channel_13,channel_14');
+	  _eegDataSink!.writeln('timestamp,AF3,F7,F3,FC5,T7,P7,O1,O2,P8,T8,FC6,F4,F8,AF4');
 
 	  // Setup periodic flush timer
 	  _flushTimer = Timer.periodic(Duration(milliseconds: _flushIntervalMs), (_) async {
