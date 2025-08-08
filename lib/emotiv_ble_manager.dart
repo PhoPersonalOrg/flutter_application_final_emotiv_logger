@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 // import 'package:lsl_flutter/lsl_flutter.dart';
 import 'crypto_utils.dart';
 import 'eeg_file_writer.dart';
+import 'motion_file_writer.dart';
 
 class EmotivBLEManager {
   // TODO: get the device serial number dynamically upon connection using the following code:
@@ -62,6 +63,7 @@ class EmotivBLEManager {
 
   // File writer instance
   EEGFileWriter? _fileWriter;
+  MotionFileWriter? _motionWriter;
 
   // LSL outlet components
   OutletWorker? _lslWorker;
@@ -149,6 +151,7 @@ class EmotivBLEManager {
     try {
       // Dispose existing file writer if any
       await _fileWriter?.dispose();
+      await _motionWriter?.dispose();
 
       // Create new file writer with custom directory
       _fileWriter = EEGFileWriter(
@@ -156,16 +159,28 @@ class EmotivBLEManager {
         customDirectoryPath: _customSaveDirectory, // Pass custom directory
       );
 
+      // Create motion writer in MOTION_RECORDINGS subfolder of same base path
+      _motionWriter = MotionFileWriter(
+        onStatusUpdate: _updateStatus,
+        customDirectoryPath: _customSaveDirectory,
+      );
+
       // Initialize the file writer
       final success = await _fileWriter!.initialize();
+      final motionSuccess = await _motionWriter!.initialize();
 
       if (!success) {
         _updateStatus("EmotivBLEManager: Failed to initialize file writer");
         _fileWriter = null;
       }
+      if (!motionSuccess) {
+        _updateStatus("EmotivBLEManager: Failed to initialize motion file writer");
+        _motionWriter = null;
+      }
     } catch (e) {
       _updateStatus("EmotivBLEManager: Error initializing file writer: $e");
       _fileWriter = null;
+      _motionWriter = null;
     }
   }
 
@@ -428,8 +443,8 @@ class EmotivBLEManager {
       print(
         "Motion Data: [${motionValues.map((v) => v.toStringAsFixed(3)).join(', ')}]",
       );
-      // Write to file using the file writer
-      // _fileWriter?.writeEEGData(motionValues); // TODO: NOT IMPLEMENTED
+      // Write to motion CSV
+      _motionWriter?.writeMotionData(motionValues);
 
       // Push to LSL stream
       // _pushToLSL(motionValues);
@@ -474,6 +489,10 @@ class EmotivBLEManager {
     if (_fileWriter != null) {
       await _fileWriter!.dispose();
       _fileWriter = null;
+    }
+    if (_motionWriter != null) {
+      await _motionWriter!.dispose();
+      _motionWriter = null;
     }
   }
 
@@ -539,5 +558,6 @@ class EmotivBLEManager {
   // Force flush any buffered data
   Future<void> flushFileBuffer() async {
     await _fileWriter?.flush();
+    await _motionWriter?.flush();
   }
 }
