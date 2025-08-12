@@ -6,7 +6,7 @@ void main() async {
   await basicExample();
 
   // Example 2: Advanced usage with multiple streams
-  await multiStreamExample();
+  // await multiStreamExample();
 }
 
 /// Basic example showing how to create an outlet and inlet

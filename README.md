@@ -71,4 +71,21 @@ sudo apt install git gnupg flex bison gperf build-essential \
   libgtest-dev libgmock-dev libabsl-dev
 
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-  ```
+```
+
+
+## Building for Android:
+Get the proper flutter NDK version: `ndkVersion = "27.0.12077973" // flutter.ndkVersion` from `android\app\build.gradle.kts`
+
+```bash
+flutter build apk -v
+
+
+
+```
+
+
+#### Error with labstreaminglayer plugin on Android:
+```
+E/flutter (19189): [ERROR:flutter/runtime/dart_vm_initializer.cc(40)] Unhandled Exception: Invalid argument(s): Couldn't resolve native function 'lsl_library_version' in 'package:liblsl/native_liblsl.dart' : Failed to load dynamic library 'liblsl.so': Failed to load dynamic library 'liblsl.so': dlopen failed: cannot locate symbol "__cxa_init_primary_exception" referenced by "/data/app/~~_XT_ZyNq8_U7kKUBdpmOTQ==/com.PhoHale.flutter_emotiv_logger-CR14shtpBN91ELiS671AVw==/base.apk!/lib/arm64-v8a/liblsl.so"....
+```
