@@ -39,7 +39,8 @@ class EmotivBLEManager {
 
   final bool _shouldAutoConnectToFirst = false;
   String? btleDeviceName;
-  Uint8List? serialNumber;
+  // Uint8List? serialNumber;
+  String? serialNumber;
   bool _isConnected = false;
   bool _isScanning = false;
 
@@ -80,6 +81,7 @@ class EmotivBLEManager {
 
   bool get isConnected => _isConnected;
   bool get isScanning => _isScanning;
+//   bool get serialNumber => _serialNumber;
 
   // Add method to set custom directory
   void setCustomSaveDirectory(String? directoryPath) {
@@ -275,6 +277,13 @@ class EmotivBLEManager {
 
       _updateStatus("Connected to ${device.platformName}");
 
+
+      // TODO 2025-08-12 - get the device serial number to use as the decoding key
+      serialNumber = device.platformName; 
+      // "Found device: EPOCX (E50202E9)"
+      // "Found device: EPOC+ (3B9ACCA6)"
+      // serialNumber = _emotivDevice.advName
+
       // Initialize file writer after successful connection
       await _initializeFileWriter();
 
@@ -320,8 +329,8 @@ class EmotivBLEManager {
             _motionDataCharacteristic = c;
             await _setupMotionCharacteristic(c); // only setNotifyValue
           }
-        }
-      }
+        } // end for characteristics
+      } // end for services
 
       // Now ask the headset to start both streams
       await _enableBluetoothDataStreams();
@@ -389,7 +398,8 @@ class EmotivBLEManager {
     if (!_validateData(data)) return;
 
     // Decrypt and decode the data
-    final decodedValues = CryptoUtils.decryptToDoubleList(data);
+    final keyString = serialNumber;
+    final decodedValues = CryptoUtils.decryptToDoubleList(keyString!, data);
 
     if (decodedValues.isNotEmpty) {
       _eegDataController.add(decodedValues);
@@ -463,6 +473,8 @@ class EmotivBLEManager {
   void _handleDisconnection() {
     _isConnected = false;
     _emotivDevice = null;
+    serialNumber = null;
+    
     // _controlCharacteristic = null;
     _eegDataCharacteristic = null;
     _motionDataCharacteristic = null;

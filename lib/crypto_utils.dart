@@ -9,10 +9,10 @@ class CryptoUtils {
   static const double _accScale = 1.0 / 16384.0; // ±2g range for accelerometer
   static const double _gyroScale = 1.0 / 131.0;   // ±250 deg/s range for gyroscope
 
-  static String decryptRawPacket(Uint8List data) {
+  static String decryptRawPacket(String keyString, Uint8List data) {
     try {
       // Device-specific 16-byte AES key (same as your Objective-C code)
-      final keyString = '6566565666756557';
+      // final keyString = '6566565666756557';
       final key = Key.fromUtf8(keyString.padRight(16, '0').substring(0, 16));
 
       final encrypter = Encrypter(AES(key, mode: AESMode.ecb, padding: null));
@@ -46,9 +46,9 @@ class CryptoUtils {
     }
   }
 
-  static List<double> decryptToDoubleList(Uint8List data) {
+  static List<double> decryptToDoubleList(String keyString, Uint8List data) {
     try {
-      final keyString ='6566565666756557'; // This is the Emotiv Epoc X's serial number, and it's hard coded. wtf is this 2025-07-31
+      // final keyString ='6566565666756557'; // This is the Emotiv Epoc X's serial number, and it's hard coded. wtf is this 2025-07-31
       final key = Key.fromUtf8(keyString.padRight(16, '0').substring(0, 16));
       final encrypter = Encrypter(AES(key, mode: AESMode.ecb, padding: null));
 
