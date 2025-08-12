@@ -165,10 +165,10 @@ packages:
     dependency: transitive
     description:
       name: code_assets
-      sha256: dd7ed641b7f642092092969f2dcd5845ab31c9f3efead0c06ca437bf9ce8a8b2
+      sha256: "7f42899e7b22f7810ea8c2b281c979add25555fbe391dde539621069e20b90b4"
       url: "https://pub.dev"
     source: hosted
-    version: "0.19.4"
+    version: "0.19.5"
   code_builder:
     dependency: transitive
     description:
@@ -277,10 +277,10 @@ packages:
     dependency: "direct main"
     description:
       name: file_picker
-      sha256: "8f9f429998f9232d65bc4757af74475ce44fc80f10704ff5dfa8b1d14fc429b9"
+      sha256: "76529fbae4cdf9c23d297230f7d5cecf5ec81c8ae11126b6e1d44d69c3c121f3"
       url: "https://pub.dev"
     source: hosted
-    version: "10.2.3"
+    version: "10.3.0"
   fixnum:
     dependency: transitive
     description:
@@ -396,10 +396,10 @@ packages:
     dependency: transitive
     description:
       name: hooks
-      sha256: "75363eae6c0c2db051c4f6b3b1fcdea8a09c4a596cc83bfff847661da6e80dfc"
+      sha256: "2bd640e4625fdfe5788ef33d825a8639797d44bce05695ab13543cde0ff9a078"
       url: "https://pub.dev"
     source: hosted
-    version: "0.19.5"
+    version: "0.20.0"
   http_multi_server:
     dependency: transitive
     description:
@@ -468,10 +468,10 @@ packages:
     dependency: "direct main"
     description:
       name: liblsl
-      sha256: "4fd9e161f305a7514a109e67862c5f52243f24956fbcf26356b720186db33979"
+      sha256: "9cd779bfa64c5a977c50ea36ec2ea9dbd8638b3efd9abcfe6e732b5fcba34945"
       url: "https://pub.dev"
     source: hosted
-    version: "0.8.0"
+    version: "0.9.0"
   lints:
     dependency: transitive
     description:
@@ -548,10 +548,10 @@ packages:
     dependency: transitive
     description:
       name: native_toolchain_c
-      sha256: "74a0c80d877c519bc6bde2c4e27b6b01c1f93c9b480f65ceae8bedd3aba3c086"
+      sha256: "7e8358a4f6ec69a4f2d366bb971af298aca50d6c2e8a07be7c12d7f6d40460aa"
       url: "https://pub.dev"
     source: hosted
-    version: "0.16.8"
+    version: "0.17.1"
   package_config:
     dependency: transitive
     description:
@@ -809,10 +809,10 @@ packages:
     dependency: transitive
     description:
       name: source_gen
-      sha256: fc787b1f89ceac9580c3616f899c9a447413cbdac1df071302127764c023a134
+      sha256: "7b19d6ba131c6eb98bfcbf8d56c1a7002eba438af2e7ae6f8398b2b0f4f381e3"
       url: "https://pub.dev"
     source: hosted
-    version: "3.0.0"
+    version: "3.1.0"
   source_span:
     dependency: transitive
     description:
@@ -974,5 +974,5 @@ packages:
     source: hosted
     version: "3.1.3"
 sdks:
-  dart: ">=3.9.0-105.0.dev <4.0.0"
+  dart: ">=3.9.0-21.0.dev <4.0.0"
   flutter: ">=3.29.0"
