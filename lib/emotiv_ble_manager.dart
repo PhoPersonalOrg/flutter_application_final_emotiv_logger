@@ -15,10 +15,8 @@ class EmotivBLEManager {
 
   // UUIDs from your Swift code
   static const String controlUuid = "81072F40-9F3D-11E3-A9DC-0002A5D5C51B";
-  static const String eegDataUuid =
-      "81072F41-9F3D-11E3-A9DC-0002A5D5C51B"; // UUID of the main data stream with ID 0x10
-  static const String motionDataUuid =
-      "81072F42-9F3D-11E3-A9DC-0002A5D5C51B"; // UUID of the gyro/other? data stream with ID 0x20
+  static const String eegDataUuid = "81072F41-9F3D-11E3-A9DC-0002A5D5C51B"; // UUID of the main data stream with ID 0x10
+  static const String motionDataUuid = "81072F42-9F3D-11E3-A9DC-0002A5D5C51B"; // UUID of the gyro/other? data stream with ID 0x20
 
   // service.characteristics[0].uuid.toString().toUpperCase()
   // "2A00"
