@@ -279,11 +279,45 @@ class EmotivBLEManager {
 
 
       // TODO 2025-08-12 - get the device serial number to use as the decoding key
-      serialNumber = device.platformName; 
+      final btKeyValue = (RegExp(r'\(([^)]+)\)').firstMatch(device.platformName)?.group(1)); // "E50202E9" -> '6566565666756557'
+      // Emotiv Epoc+ (2025-08-13 - Apogee - from CyKit via USB Reciever)
+      // [32, 13, 6, 255, 6, 38, 59, 154, 204, 166, 43, 1, 128, 0, 16, 32, 16]
+      // Device Firmware = 0x6ff
+      // Software Firmware = 0x626
+      // Using Device: EEG Signals
+      // Serial Number: UD20221202006756
+      // AES Key = [54, 53, 53, 55, 55, 55, 53, 54, 54, 54, 53, 53, 54, 54, 53, 54]
+
+
+      // // Emotiv EpocX (2025-08-13 - Apogee - from CyKit via USB Reciever)
+      // [32, 32, 6, 255, 7, 32, 229, 2, 2, 233, 43, 1, 128, 0, 16, 32, 16]
+      // Device Firmware = 0x6ff
+      // Software Firmware = 0x720
+      // Using Device: EEG Signals
+      // Serial Number: UD20221202006756
+      // Company: None
+      // Device: None
+      // Vendor: 0x8086
+      // Product: 0x7ae0
+      // AES Key = [54, 53, 53, 55, 55, 55, 53, 54, 54, 54, 53, 53, 54, 54, 53, 54]
+
+
       // "Found device: EPOCX (E50202E9)"
       // "Found device: EPOC+ (3B9ACCA6)"
       // serialNumber = _emotivDevice.advName
+      // INPUT: "E50202E9"
+      // List.generate(btKeyValue!.length ~/ 2, (i) {String pair = btKeyValue!.substring(i*2, i*2+2); return int.parse(pair, radix: 16).toString();}).join() // "22922233"
+      // btKeyValue!.split('').map((c) => int.parse(c, radix: 16).toString()).join() // "1450202149"
 
+      // Create serial number similar to Python code
+      Uint8List serialNumberList = CryptoUtils.createSerialNumber(btKeyValue!);
+      String decimalStr = serialNumberList.map((b) => b.toString()).join();
+      print(decimalStr); // prints something like: 0000000000002295262333
+      // serialNumber = decimalStr; // CryptoUtils.createSerialNumber(btKeyValue); // '00000000000023322229'
+
+      serialNumber = '6566565666756557'; // TODO 2025-08-13 serialNumber - ALWAYS HARDCODED, not sure why it needs to be
+      print("TODO 2025-08-13 serialNumber - ALWAYS HARDCODED, not sure why it needs to be");
+      
       // Initialize file writer after successful connection
       await _initializeFileWriter();
 
