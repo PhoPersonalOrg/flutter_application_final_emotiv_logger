@@ -375,29 +375,61 @@ class EmotivBLEManager {
     }
   }
 
+
+  /// Send the start command (0x100) to initiate data streaming
+  Future<void> _sendStartCommand(BluetoothCharacteristic characteristic) async {
+    try {
+      // Create the start command similar to C++ code: newValue.Data[0] = 0x100;
+      Uint8List startCommand = Uint8List.fromList([0x00, 0x01, 0x00, 0x00]); // 0x100 in little-endian
+      
+      await characteristic.write(startCommand, withoutResponse: false);
+      print("> Sent start command to characteristic: ${characteristic.uuid}");
+      
+    } catch (e) {
+      print("> Error sending start command: $e");
+    }
+  }
+
+
   // 0x0001 -> start EEG (0x41)
   // 0x0002 -> start MEMS (0x42)
   Future<void> _enableBluetoothDataStreams() async {
-    final c = _eegDataCharacteristic;
-    if (c == null) return;
 
-    final data = Uint8List.fromList([0x01, 0x00]);
-
-    try {
-      if (c.properties.writeWithoutResponse) {
-        await c.write(data, withoutResponse: true);
-      } else if (c.properties.write) {
-        await c.write(data, withoutResponse: false);
-      } else {
-        _updateStatus("EEG characteristic is not writable (${c.uuid})");
-        return;
-      }
+    if (_eegDataCharacteristic != null) {  
+      await _sendStartCommand(_eegDataCharacteristic!);
       print(
-        'wrote 0x01 to ${c.uuid} (wNR:${c.properties.writeWithoutResponse})',
+        'wrote 0x01 to _eegDataCharacteristic)',
       );
-    } catch (e) {
-      _updateStatus("Enable streams write failed on ${c.uuid}: $e");
     }
+    
+    if (_motionDataCharacteristic != null) {
+      await _sendStartCommand(_motionDataCharacteristic!);
+      print(
+        'wrote 0x01 to _motionDataCharacteristic)',
+      );
+
+    }
+
+    // final c = _eegDataCharacteristic;
+    // if (c == null) return;
+
+    // final data = Uint8List.fromList([0x01, 0x00]);
+
+    // try {
+    //   if (c.properties.writeWithoutResponse) {
+    //     await c.write(data, withoutResponse: true);
+    //   } else if (c.properties.write) {
+    //     await c.write(data, withoutResponse: false);
+    //   } else {
+    //     _updateStatus("EEG characteristic is not writable (${c.uuid})");
+    //     return;
+    //   }
+    //   print(
+    //     'wrote 0x01 to ${c.uuid} (wNR:${c.properties.writeWithoutResponse})',
+    //   );
+    // } catch (e) {
+    //   _updateStatus("Enable streams write failed on ${c.uuid}: $e");
+    // }
   }
 
   Future<void> _setupEEGDataCharacteristic(
@@ -419,6 +451,9 @@ class EmotivBLEManager {
       // 	final configData = Uint8List.fromList([0x01, 0x00]); // 0x0001 as little-endian
       // 	await characteristic.write(configData, withoutResponse: false);
       // }
+
+      // // Send the start command (0x100) similar to C++ code
+      // await _sendStartCommand(characteristic);
 
       _updateStatus("EEG characteristic configured");
     } catch (e) {
@@ -464,7 +499,9 @@ class EmotivBLEManager {
       // 	final configData = Uint8List.fromList([0x01, 0x00]); // 0x0001 as little-endian
       // 	await characteristic.write(configData, withoutResponse: false);
       // }
-
+      // Send the start command (0x100) similar to C++ code
+      // await _sendStartCommand(characteristic);
+      
       _updateStatus("Motion characteristic configured");
     } catch (e) {
       _updateStatus("Error setting up Motion characteristic: $e");
