@@ -5,6 +5,9 @@
         },
         {
             "path": "../emotiv-lsl"
+        },
+        {
+            "path": "../CyKit"
         }
     ],
 	"settings": {
