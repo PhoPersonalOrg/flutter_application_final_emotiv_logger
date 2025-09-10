@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'dart:io';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:flutter_emotiv_logger/generic_file_writer.dart';
 import 'package:lsl_flutter/lsl_flutter.dart';
 import 'package:path_provider/path_provider.dart';
 // import 'package:lsl_flutter/lsl_flutter.dart';
@@ -61,8 +62,10 @@ class EmotivBLEManager {
       StreamController<List<String>>.broadcast();
 
   // File writer instance
-  EEGFileWriter? _fileWriter;
-  MotionFileWriter? _motionWriter;
+  EEGFileWriter? _eegFileWriter;
+  MotionFileWriter? _motionFileWriter;
+  GenericFileWriter? _rawFileWriter;
+
 
   // LSL outlet components
   OutletWorker? _lslWorker;
@@ -148,40 +151,73 @@ class EmotivBLEManager {
   }
 
   Future<void> _initializeFileWriter() async {
+
     try {
       // Dispose existing file writer if any
-      await _fileWriter?.dispose();
-      await _motionWriter?.dispose();
+      await _eegFileWriter?.dispose();
 
       // Create new file writer with custom directory
-      _fileWriter = EEGFileWriter(
+      _eegFileWriter = EEGFileWriter(
         onStatusUpdate: _updateStatus,
         customDirectoryPath: _customSaveDirectory, // Pass custom directory
       );
+      // Initialize the file writer
+      final success = await _eegFileWriter!.initialize();
+
+      if (!success) {
+        _updateStatus("EmotivBLEManager: Failed to initialize EEG file writer");
+        _eegFileWriter = null;
+      }
+    } catch (e) {
+      _updateStatus("EmotivBLEManager: Error initializing EEG file writer: $e");
+      _eegFileWriter = null;
+    }
+
+
+
+    try {
+      // Dispose existing file writer if any
+      await _motionFileWriter?.dispose();
 
       // Create motion writer in MOTION_RECORDINGS subfolder of same base path
-      _motionWriter = MotionFileWriter(
+      _motionFileWriter = MotionFileWriter(
         onStatusUpdate: _updateStatus,
         customDirectoryPath: _customSaveDirectory,
       );
 
       // Initialize the file writer
-      final success = await _fileWriter!.initialize();
-      final motionSuccess = await _motionWriter!.initialize();
+      final motionSuccess = await _motionFileWriter!.initialize();
 
-      if (!success) {
-        _updateStatus("EmotivBLEManager: Failed to initialize file writer");
-        _fileWriter = null;
-      }
       if (!motionSuccess) {
         _updateStatus("EmotivBLEManager: Failed to initialize motion file writer");
-        _motionWriter = null;
+        _motionFileWriter = null;
       }
     } catch (e) {
-      _updateStatus("EmotivBLEManager: Error initializing file writer: $e");
-      _fileWriter = null;
-      _motionWriter = null;
+      _updateStatus("EmotivBLEManager: Error initializing motion file writer: $e");
+      _motionFileWriter = null;
     }
+
+    try {
+      // Dispose existing file writer if any
+      await _rawFileWriter?.dispose();
+
+      _rawFileWriter = GenericFileWriter(
+        onStatusUpdate: _updateStatus,
+        customDirectoryPath: _customSaveDirectory,
+      );
+
+      // Initialize the file writer
+      final rawSuccess = await _rawFileWriter!.initialize();
+
+      if (!rawSuccess) {
+        _updateStatus("EmotivBLEManager: Failed to initialize raw file writer");
+        _rawFileWriter = null;
+      }
+    } catch (e) {
+      _updateStatus("EmotivBLEManager: Error initializing raw file writer: $e");
+      _rawFileWriter = null;
+    }
+
   }
 
   Future<void> startScanning() async {
@@ -464,6 +500,9 @@ class EmotivBLEManager {
   void _processEEGData(Uint8List data) {
     // print("_processEEGData(rawData: [${data.map((v) => v.toString()).join(', ')}]");
 
+    _processRawData(data);
+
+
     if (!_validateData(data)) return;
 
     // Decrypt and decode the data
@@ -475,7 +514,7 @@ class EmotivBLEManager {
       // print("EEG Data: ${decodedValues.take(5).join(', ')}..."); // Print first 5 values
 
       // Write to file using the file writer
-      _fileWriter?.writeEEGData(decodedValues);
+      _eegFileWriter?.writeEEGData(decodedValues);
 
       // Push to LSL stream
       _pushToLSL(decodedValues);
@@ -514,6 +553,7 @@ class EmotivBLEManager {
       "_processMotionData(rawData: [${data.map((v) => v.toString()).join(', ')}]",
     );
     // Process raw Motion data and emit only the decoded motion data
+    _processRawData(data); // output raw
 
     // Decode motion data from Motion packet
     final motionValues = CryptoUtils.decodeMotionData(data);
@@ -523,7 +563,30 @@ class EmotivBLEManager {
         "Motion Data: [${motionValues.map((v) => v.toStringAsFixed(3)).join(', ')}]",
       );
       // Write to motion CSV
-      _motionWriter?.writeMotionData(motionValues);
+      _motionFileWriter?.writeMotionData(motionValues);
+
+      // Push to LSL stream
+      // _pushToLSL(motionValues);
+    }
+  }
+
+
+  void _processRawData(Uint8List data) {
+    // if (!_validateData(data)) return; // I think that's okay here
+    print(
+      "_processRawData(rawData: [${data.map((v) => v.toString()).join(', ')}]",
+    );
+    // Process raw Motion data and emit only the decoded motion data
+
+    // Decode motion data from Motion packet
+
+    if (data.isNotEmpty) {
+      // _motionDataController.add(data);
+      // print(
+      //   "Motion Data: [${data.map((v) => v.toStringAsFixed(3)).join(', ')}]",
+      // );
+      // Write to motion CSV
+      _rawFileWriter?.writeGenericData(data);
 
       // Push to LSL stream
       // _pushToLSL(motionValues);
@@ -567,14 +630,19 @@ class EmotivBLEManager {
   }
 
   Future<void> _closeFileWriter() async {
-    if (_fileWriter != null) {
-      await _fileWriter!.dispose();
-      _fileWriter = null;
+    if (_eegFileWriter != null) {
+      await _eegFileWriter!.dispose();
+      _eegFileWriter = null;
     }
-    if (_motionWriter != null) {
-      await _motionWriter!.dispose();
-      _motionWriter = null;
+    if (_motionFileWriter != null) {
+      await _motionFileWriter!.dispose();
+      _motionFileWriter = null;
     }
+    if (_rawFileWriter != null) {
+      await _rawFileWriter!.dispose();
+      _rawFileWriter = null;
+    }
+
   }
 
   Future<void> _closeLSLOutlet() async {
@@ -628,17 +696,18 @@ class EmotivBLEManager {
 
   // Utility method to get current file info
   Future<Map<String, dynamic>?> getFileInfo() async {
-    return await _fileWriter?.getFileInfo();
+    return await _eegFileWriter?.getFileInfo();
   }
 
   // Additional utility methods for file writer
-  String? get currentFilePath => _fileWriter?.filePath;
-  bool get isFileWriterInitialized => _fileWriter?.isInitialized ?? false;
-  int get bufferedLines => _fileWriter?.bufferedLines ?? 0;
+  String? get currentFilePath => _eegFileWriter?.filePath;
+  bool get isFileWriterInitialized => _eegFileWriter?.isInitialized ?? false;
+  int get bufferedLines => _eegFileWriter?.bufferedLines ?? 0;
 
   // Force flush any buffered data
   Future<void> flushFileBuffer() async {
-    await _fileWriter?.flush();
-    await _motionWriter?.flush();
+    await _eegFileWriter?.flush();
+    await _motionFileWriter?.flush();
+    await _rawFileWriter?.flush();
   }
 }
