@@ -430,7 +430,7 @@ class EmotivBLEManager {
   // 0x0001 -> start EEG (0x41)
   // 0x0002 -> start MEMS (0x42)
   Future<void> _enableBluetoothDataStreams() async {
-
+    // TODO 2025-09-10 - Definitely noticed I was getting data (maybe even both EEG and Motion!) before this function was ever called -- I noticed due to having a breakpoint here.
     if (_eegDataCharacteristic != null) {  
       await _sendStartCommand(_eegDataCharacteristic!);
       print(
