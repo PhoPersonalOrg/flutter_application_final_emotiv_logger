@@ -20,7 +20,7 @@ class EmotivBLEApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Emotiv BLE LSL Logger',
-      theme: ThemeData(primarySwatch: const Color.fromARGB(255, 115, 8, 255), useMaterial3: true),
+      theme: ThemeData(primarySwatch: Colors.purple, useMaterial3: true),
       home: EmotivHomePage(storage: FileStorage.new()),
     );
   }
