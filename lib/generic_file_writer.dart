@@ -82,7 +82,8 @@ class GenericFileWriter {
     }
   }
 
-  void writeGenericData(Uint8List genericData) {
+  // void writeGenericData(Uint8List genericData) {
+  void writeGenericData(List<int> genericData) {
     if (!_isInitialized || _isDisposed || _dataSink == null) return;
     try {
       final timestamp = DateTime.now().millisecondsSinceEpoch;

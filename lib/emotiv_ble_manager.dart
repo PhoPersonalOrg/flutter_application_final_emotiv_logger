@@ -478,6 +478,8 @@ class EmotivBLEManager {
       // Listen for data
       characteristic.lastValueStream.listen((data) {
         if (data.isNotEmpty) {
+          // List<int>
+          _processRawData(data); // output raw
           _processEEGData(Uint8List.fromList(data));
         }
       });
@@ -500,8 +502,7 @@ class EmotivBLEManager {
   void _processEEGData(Uint8List data) {
     // print("_processEEGData(rawData: [${data.map((v) => v.toString()).join(', ')}]");
 
-    _processRawData(data);
-
+    // _processRawData(data);
 
     if (!_validateData(data)) return;
 
@@ -529,6 +530,7 @@ class EmotivBLEManager {
 
       characteristic.lastValueStream.listen((data) {
         if (data.isNotEmpty) {
+          _processRawData(data); // output raw
           _processMotionData(Uint8List.fromList(data));
         }
       });
@@ -553,7 +555,7 @@ class EmotivBLEManager {
       "_processMotionData(rawData: [${data.map((v) => v.toString()).join(', ')}]",
     );
     // Process raw Motion data and emit only the decoded motion data
-    _processRawData(data); // output raw
+    // _processRawData(data); // output raw
 
     // Decode motion data from Motion packet
     final motionValues = CryptoUtils.decodeMotionData(data);
@@ -571,7 +573,9 @@ class EmotivBLEManager {
   }
 
 
-  void _processRawData(Uint8List data) {
+  // void _processRawData(Uint8List data) {
+  void _processRawData(List<int> data) {
+    // called by both `_processEEGData` and `_processMotionData`
     // if (!_validateData(data)) return; // I think that's okay here
     print(
       "_processRawData(rawData: [${data.map((v) => v.toString()).join(', ')}]",
