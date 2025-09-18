@@ -250,50 +250,50 @@ packages:
     dependency: "direct main"
     description:
       name: flutter_blue_plus
-      sha256: ad723600e3ba113ab3d68a963273c42212738336c8de67bc99db10d1b950dc1f
+      sha256: "69a8c87c11fc792e8cf0f997d275484fbdb5143ac9f0ac4d424429700cb4e0ed"
       url: "https://pub.dev"
     source: hosted
-    version: "1.36.2"
+    version: "1.36.8"
   flutter_blue_plus_android:
     dependency: transitive
     description:
       name: flutter_blue_plus_android
-      sha256: "2761b2d662280deee493809ace65f27178b597a6973f7334a244bb3b48fe8fdd"
+      sha256: "6f7fe7e69659c30af164a53730707edc16aa4d959e4c208f547b893d940f853d"
       url: "https://pub.dev"
     source: hosted
-    version: "7.0.0"
+    version: "7.0.4"
   flutter_blue_plus_darwin:
     dependency: transitive
     description:
       name: flutter_blue_plus_darwin
-      sha256: "7e078d4d85771ec625f0f639f82ecd99bdadb4b63b9c81ecf4f9adecc2e461ba"
+      sha256: "682982862c1d964f4d54a3fb5fccc9e59a066422b93b7e22079aeecd9c0d38f8"
       url: "https://pub.dev"
     source: hosted
-    version: "7.0.0"
+    version: "7.0.3"
   flutter_blue_plus_linux:
     dependency: transitive
     description:
       name: flutter_blue_plus_linux
-      sha256: e9e81fbeb585db0e23d5b6bb2ac3da27c1ecf96a3a52d08e60638eea0efa9ef2
+      sha256: "56b0c45edd0a2eec8f85bd97a26ac3cd09447e10d0094fed55587bf0592e3347"
       url: "https://pub.dev"
     source: hosted
-    version: "7.0.0"
+    version: "7.0.3"
   flutter_blue_plus_platform_interface:
     dependency: transitive
     description:
       name: flutter_blue_plus_platform_interface
-      sha256: "52840efab3c6e5adcd6e5fddeae393d1f7811d14f6361b802e391f8e33a5ee25"
+      sha256: "84fbd180c50a40c92482f273a92069960805ce324e3673ad29c41d2faaa7c5c2"
       url: "https://pub.dev"
     source: hosted
-    version: "5.0.0"
+    version: "7.0.0"
   flutter_blue_plus_web:
     dependency: transitive
     description:
       name: flutter_blue_plus_web
-      sha256: "74655614ff095786549d5468a1345b27cc94b97ef9abaa595f74160c10a91426"
+      sha256: a1aceee753d171d24c0e0cdadb37895b5e9124862721f25f60bb758e20b72c99
       url: "https://pub.dev"
     source: hosted
-    version: "7.0.0"
+    version: "7.0.2"
   flutter_lints:
     dependency: "direct dev"
     description:
