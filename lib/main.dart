@@ -54,6 +54,9 @@ class _EmotivHomePageState extends State<EmotivHomePage>
   // Add these new state variables
   List<String> _foundDevices = [];
   String _connectedDeviceName = '';
+  
+  // EEG data history for table display
+  List<Map<String, dynamic>> _eegRecords = [];
 
   @override
   void initState() {
@@ -82,6 +85,7 @@ class _EmotivHomePageState extends State<EmotivHomePage>
     _eegSubscription = _bleManager.eegDataStream.listen((data) {
       setState(() {
         _latestEEGData = data;
+        _addEegRecord(data);
       });
     });
 
@@ -204,6 +208,37 @@ class _EmotivHomePageState extends State<EmotivHomePage>
     _connectionSubscription.cancel();
     _bleManager.dispose();
     super.dispose();
+  }
+
+  // Add EEG record to history (keep last 25)
+  void _addEegRecord(List<double> eegData) {
+    if (eegData.length >= 14) { // Ensure we have all 14 channels
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final record = {
+        'timestamp': timestamp,
+        'AF3': eegData[0],
+        'F7': eegData[1],
+        'F3': eegData[2],
+        'FC5': eegData[3],
+        'T7': eegData[4],
+        'P7': eegData[5],
+        'O1': eegData[6],
+        'O2': eegData[7],
+        'P8': eegData[8],
+        'T8': eegData[9],
+        'FC6': eegData[10],
+        'F4': eegData[11],
+        'F8': eegData[12],
+        'AF4': eegData[13],
+      };
+      
+      _eegRecords.add(record);
+      
+      // Keep only last 25 records
+      if (_eegRecords.length > 25) {
+        _eegRecords.removeAt(0);
+      }
+    }
   }
 
   // Add this method to navigate to settings
@@ -385,6 +420,94 @@ class _EmotivHomePageState extends State<EmotivHomePage>
                                   );
                                 }),
                               ],
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            // EEG Data Table
+            Expanded(
+              flex: 2,
+              child: Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'EEG Data History (Last 25 Records)',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      if (_eegRecords.isEmpty)
+                        const Expanded(
+                          child: Center(
+                            child: Text(
+                              'No EEG data recorded yet...\nConnect to Emotiv device to see data history',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: Colors.grey),
+                            ),
+                          ),
+                        )
+                      else
+                        Expanded(
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: SingleChildScrollView(
+                              child: DataTable(
+                                columnSpacing: 8.0,
+                                horizontalMargin: 12.0,
+                                columns: const [
+                                  DataColumn(label: Text('Time', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('AF3', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('F7', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('F3', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('FC5', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('T7', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('P7', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('O1', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('O2', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('P8', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('T8', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('FC6', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('F4', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('F8', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('AF4', style: TextStyle(fontWeight: FontWeight.bold))),
+                                ],
+                                rows: _eegRecords.reversed.map((record) {
+                                  return DataRow(
+                                    cells: [
+                                      DataCell(
+                                        Text(
+                                          DateTime.fromMillisecondsSinceEpoch(record['timestamp'])
+                                              .toString().substring(11, 23), // Show time only
+                                          style: const TextStyle(fontSize: 10, fontFamily: 'monospace'),
+                                        ),
+                                      ),
+                                      DataCell(Text(record['AF3'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['F7'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['F3'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['FC5'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['T7'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['P7'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['O1'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['O2'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['P8'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['T8'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['FC6'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['F4'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['F8'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['AF4'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                    ],
+                                  );
+                                }).toList(),
+                              ),
                             ),
                           ),
                         ),
