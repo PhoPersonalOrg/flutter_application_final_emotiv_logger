@@ -210,7 +210,7 @@ class _EmotivHomePageState extends State<EmotivHomePage>
     super.dispose();
   }
 
-  // Add EEG record to history (keep last 25)
+  // Add EEG record to history (keep last 5)
   void _addEegRecord(List<double> eegData) {
     if (eegData.length >= 14) { // Ensure we have all 14 channels
       final timestamp = DateTime.now().millisecondsSinceEpoch;
@@ -234,8 +234,8 @@ class _EmotivHomePageState extends State<EmotivHomePage>
       
       _eegRecords.add(record);
       
-      // Keep only last 25 records
-      if (_eegRecords.length > 25) {
+      // Keep only last 5 records
+      if (_eegRecords.length > 5) {
         _eegRecords.removeAt(0);
       }
     }
@@ -339,7 +339,7 @@ class _EmotivHomePageState extends State<EmotivHomePage>
 
             const SizedBox(height: 16),
 
-            // EEG Data Display
+            // EEG Data Table (replaces the old stream display)
             Expanded(
               flex: 2,
               child: Card(
@@ -349,99 +349,7 @@ class _EmotivHomePageState extends State<EmotivHomePage>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'EEG Data Stream',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                      const SizedBox(height: 8),
-                      if (_latestEEGData.isEmpty)
-                        const Expanded(
-                          child: Center(
-                            child: Text(
-                              'No data received yet...\nConnect to Emotiv device to see EEG data',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(color: Colors.grey),
-                            ),
-                          ),
-                        )
-                      else
-                        Expanded(
-                          child: SingleChildScrollView(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Latest Sample (${_latestEEGData.length} channels):',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                ...List.generate(_latestEEGData.length, (
-                                  index,
-                                ) {
-                                  return Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      vertical: 2.0,
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        SizedBox(
-                                          width: 80,
-                                          child: Text(
-                                            'CH${index + 1}:',
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.w500,
-                                            ),
-                                          ),
-                                        ),
-                                        Expanded(
-                                          child: Container(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 8,
-                                              vertical: 4,
-                                            ),
-                                            decoration: BoxDecoration(
-                                              color: Colors.grey[100],
-                                              borderRadius:
-                                                  BorderRadius.circular(4),
-                                            ),
-                                            child: Text(
-                                              _latestEEGData[index]
-                                                  .toStringAsFixed(6),
-                                              style: const TextStyle(
-                                                fontFamily: 'monospace',
-                                                fontSize: 12,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-                                }),
-                              ],
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 16),
-
-            // EEG Data Table
-            Expanded(
-              flex: 2,
-              child: Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'EEG Data History (Last 25 Records)',
+                        'EEG Data History (Last 5 Records)',
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       const SizedBox(height: 8),
@@ -461,6 +369,7 @@ class _EmotivHomePageState extends State<EmotivHomePage>
                             scrollDirection: Axis.horizontal,
                             child: SingleChildScrollView(
                               child: DataTable(
+                                dataRowHeight: 30.0,
                                 columnSpacing: 8.0,
                                 horizontalMargin: 12.0,
                                 columns: const [
