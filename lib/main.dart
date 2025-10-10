@@ -20,7 +20,7 @@ class EmotivBLEApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Emotiv BLE LSL Logger',
-      theme: ThemeData(primarySwatch: Colors.blue, useMaterial3: true),
+      theme: ThemeData(primarySwatch: Colors.purple, useMaterial3: true),
       home: EmotivHomePage(storage: FileStorage.new()),
     );
   }
@@ -54,6 +54,9 @@ class _EmotivHomePageState extends State<EmotivHomePage>
   // Add these new state variables
   List<String> _foundDevices = [];
   String _connectedDeviceName = '';
+  
+  // EEG data history for table display
+  List<Map<String, dynamic>> _eegRecords = [];
 
   @override
   void initState() {
@@ -82,6 +85,7 @@ class _EmotivHomePageState extends State<EmotivHomePage>
     _eegSubscription = _bleManager.eegDataStream.listen((data) {
       setState(() {
         _latestEEGData = data;
+        _addEegRecord(data);
       });
     });
 
@@ -206,6 +210,37 @@ class _EmotivHomePageState extends State<EmotivHomePage>
     super.dispose();
   }
 
+  // Add EEG record to history (keep last 5)
+  void _addEegRecord(List<double> eegData) {
+    if (eegData.length >= 14) { // Ensure we have all 14 channels
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final record = {
+        'timestamp': timestamp,
+        'AF3': eegData[0],
+        'F7': eegData[1],
+        'F3': eegData[2],
+        'FC5': eegData[3],
+        'T7': eegData[4],
+        'P7': eegData[5],
+        'O1': eegData[6],
+        'O2': eegData[7],
+        'P8': eegData[8],
+        'T8': eegData[9],
+        'FC6': eegData[10],
+        'F4': eegData[11],
+        'F8': eegData[12],
+        'AF4': eegData[13],
+      };
+      
+      _eegRecords.add(record);
+      
+      // Keep only last 5 records
+      if (_eegRecords.length > 5) {
+        _eegRecords.removeAt(0);
+      }
+    }
+  }
+
   // Add this method to navigate to settings
   Future<void> _openFileSettings() async {
     final result = await Navigator.push(
@@ -304,7 +339,7 @@ class _EmotivHomePageState extends State<EmotivHomePage>
 
             const SizedBox(height: 16),
 
-            // EEG Data Display
+            // EEG Data Table (replaces the old stream display)
             Expanded(
               flex: 2,
               child: Card(
@@ -314,15 +349,15 @@ class _EmotivHomePageState extends State<EmotivHomePage>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'EEG Data Stream',
+                        'EEG Data History (Last 5 Records)',
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       const SizedBox(height: 8),
-                      if (_latestEEGData.isEmpty)
+                      if (_eegRecords.isEmpty)
                         const Expanded(
                           child: Center(
                             child: Text(
-                              'No data received yet...\nConnect to Emotiv device to see EEG data',
+                              'No EEG data recorded yet...\nConnect to Emotiv device to see data history',
                               textAlign: TextAlign.center,
                               style: TextStyle(color: Colors.grey),
                             ),
@@ -331,60 +366,57 @@ class _EmotivHomePageState extends State<EmotivHomePage>
                       else
                         Expanded(
                           child: SingleChildScrollView(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Latest Sample (${_latestEEGData.length} channels):',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                ...List.generate(_latestEEGData.length, (
-                                  index,
-                                ) {
-                                  return Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                      vertical: 2.0,
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        SizedBox(
-                                          width: 80,
-                                          child: Text(
-                                            'CH${index + 1}:',
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.w500,
-                                            ),
-                                          ),
+                            scrollDirection: Axis.horizontal,
+                            child: SingleChildScrollView(
+                              child: DataTable(
+                                dataRowHeight: 30.0,
+                                columnSpacing: 8.0,
+                                horizontalMargin: 12.0,
+                                columns: const [
+                                  DataColumn(label: Text('Time', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('AF3', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('F7', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('F3', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('FC5', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('T7', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('P7', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('O1', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('O2', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('P8', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('T8', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('FC6', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('F4', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('F8', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(label: Text('AF4', style: TextStyle(fontWeight: FontWeight.bold))),
+                                ],
+                                rows: _eegRecords.reversed.map((record) {
+                                  return DataRow(
+                                    cells: [
+                                      DataCell(
+                                        Text(
+                                          DateTime.fromMillisecondsSinceEpoch(record['timestamp'])
+                                              .toString().substring(11, 23), // Show time only
+                                          style: const TextStyle(fontSize: 10, fontFamily: 'monospace'),
                                         ),
-                                        Expanded(
-                                          child: Container(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 8,
-                                              vertical: 4,
-                                            ),
-                                            decoration: BoxDecoration(
-                                              color: Colors.grey[100],
-                                              borderRadius:
-                                                  BorderRadius.circular(4),
-                                            ),
-                                            child: Text(
-                                              _latestEEGData[index]
-                                                  .toStringAsFixed(6),
-                                              style: const TextStyle(
-                                                fontFamily: 'monospace',
-                                                fontSize: 12,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
+                                      ),
+                                      DataCell(Text(record['AF3'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['F7'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['F3'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['FC5'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['T7'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['P7'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['O1'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['O2'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['P8'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['T8'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['FC6'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['F4'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['F8'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(Text(record['AF4'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                    ],
                                   );
-                                }),
-                              ],
+                                }).toList(),
+                              ),
                             ),
                           ),
                         ),

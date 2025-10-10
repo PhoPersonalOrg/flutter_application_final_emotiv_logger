@@ -9,10 +9,34 @@ class CryptoUtils {
   static const double _accScale = 1.0 / 16384.0; // ±2g range for accelerometer
   static const double _gyroScale = 1.0 / 131.0;   // ±250 deg/s range for gyroscope
 
-  static String decryptRawPacket(Uint8List data) {
+  /// Create serial number from Bluetooth key (similar to Python code)
+  static Uint8List createSerialNumber(String btKey) {
+    // Similar to Python: bytes(("\x00" * 12),'utf-8') + bytearray.fromhex(str(BT_key[6:8] + BT_key[4:6] + BT_key[2:4] + BT_key[0:2]))
+    
+    // Create 12 bytes of zeros
+    Uint8List zeros = Uint8List(12);
+    
+    // Parse the hex key in reverse order (similar to Python code)
+    String reversedKey = btKey.substring(6, 8) + 
+                        btKey.substring(4, 6) + 
+                        btKey.substring(2, 4) + 
+                        btKey.substring(0, 2);
+    
+    // Convert hex string to bytes
+    List<int> keyBytes = [];
+    for (int i = 0; i < reversedKey.length; i += 2) {
+      keyBytes.add(int.parse(reversedKey.substring(i, i + 2), radix: 16));
+    }
+    
+    // Combine zeros and key bytes
+    Uint8List serialNumber = Uint8List.fromList([...zeros, ...keyBytes]);
+    return serialNumber;
+  }
+
+  static String decryptRawPacket(String keyString, Uint8List data) {
     try {
       // Device-specific 16-byte AES key (same as your Objective-C code)
-      final keyString = '6566565666756557';
+      // final keyString = '6566565666756557';
       final key = Key.fromUtf8(keyString.padRight(16, '0').substring(0, 16));
 
       final encrypter = Encrypter(AES(key, mode: AESMode.ecb, padding: null));
@@ -46,9 +70,9 @@ class CryptoUtils {
     }
   }
 
-  static List<double> decryptToDoubleList(Uint8List data) {
+  static List<double> decryptToDoubleList(String keyString, Uint8List data) {
     try {
-      final keyString ='6566565666756557'; // This is the Emotiv Epoc X's serial number, and it's hard coded. wtf is this 2025-07-31
+      // final keyString ='6566565666756557'; // This is the Emotiv Epoc X's serial number, and it's hard coded. wtf is this 2025-07-31
       final key = Key.fromUtf8(keyString.padRight(16, '0').substring(0, 16));
       final encrypter = Encrypter(AES(key, mode: AESMode.ecb, padding: null));
 
