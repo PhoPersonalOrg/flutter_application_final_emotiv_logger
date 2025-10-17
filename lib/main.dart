@@ -428,7 +428,7 @@ class _EmotivHomePageState extends State<EmotivHomePage>
 
             const SizedBox(height: 16),
 
-            // Motion Data Display
+            // EEG Live Data Display
             Expanded(
               flex: 1,
               child: Card(
@@ -438,15 +438,15 @@ class _EmotivHomePageState extends State<EmotivHomePage>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Motion Data Stream',
+                        'EEG Data Stream',
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                       const SizedBox(height: 8),
-                      if (_latestMotionData.isEmpty)
+                      if (_latestEEGData.isEmpty)
                         const Expanded(
                           child: Center(
                             child: Text(
-                              'No motion data received yet...',
+                              'No EEG data received yet...',
                               textAlign: TextAlign.center,
                               style: TextStyle(color: Colors.grey),
                             ),
@@ -459,20 +459,20 @@ class _EmotivHomePageState extends State<EmotivHomePage>
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 const Text(
-                                  'Latest Motion Sample (6-axis IMU):',
+                                  'Latest EEG Sample (14 channels):',
                                   style: TextStyle(fontWeight: FontWeight.bold),
                                 ),
                                 const SizedBox(height: 8),
-                                // Accelerometer data
+                                // First 7 EEG channels
                                 Text(
-                                  'Accelerometer (g):',
+                                  'Channels AF3, F7, F3, FC5, T7, P7, O1:',
                                   style: TextStyle(
                                     fontWeight: FontWeight.w600,
                                     color: Colors.blue[700],
                                   ),
                                 ),
-                                ...List.generate(3, (index) {
-                                  final labels = ['AccX', 'AccY', 'AccZ'];
+                                ...List.generate(7, (index) {
+                                  final labels = ['AF3','F7','F3','FC5','T7','P7','O1'];
                                   return Padding(
                                     padding: const EdgeInsets.symmetric(
                                       vertical: 1.0,
@@ -500,7 +500,7 @@ class _EmotivHomePageState extends State<EmotivHomePage>
                                                   BorderRadius.circular(4),
                                             ),
                                             child: Text(
-                                              _latestMotionData[index]
+                                              _latestEEGData.length > index ? _latestEEGData[index]
                                                   .toStringAsFixed(3),
                                               style: const TextStyle(
                                                 fontFamily: 'monospace',
@@ -514,16 +514,16 @@ class _EmotivHomePageState extends State<EmotivHomePage>
                                   );
                                 }),
                                 const SizedBox(height: 8),
-                                // Gyroscope data
+                                // Next 7 EEG channels
                                 Text(
-                                  'Gyroscope (deg/s):',
+                                  'Channels O2, P8, T8, FC6, F4, F8, AF4:',
                                   style: TextStyle(
                                     fontWeight: FontWeight.w600,
                                     color: Colors.green[700],
                                   ),
                                 ),
-                                ...List.generate(3, (index) {
-                                  final labels = ['GyroX', 'GyroY', 'GyroZ'];
+                                ...List.generate(7, (index) {
+                                  final labels = ['O2','P8','T8','FC6','F4','F8','AF4'];
                                   return Padding(
                                     padding: const EdgeInsets.symmetric(
                                       vertical: 1.0,
@@ -551,7 +551,7 @@ class _EmotivHomePageState extends State<EmotivHomePage>
                                                   BorderRadius.circular(4),
                                             ),
                                             child: Text(
-                                              _latestMotionData[index + 3]
+                                              _latestEEGData.length > (index + 7) ? _latestEEGData[index + 7]
                                                   .toStringAsFixed(3),
                                               style: const TextStyle(
                                                 fontFamily: 'monospace',
