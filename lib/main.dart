@@ -500,8 +500,9 @@ class _EmotivHomePageState extends State<EmotivHomePage>
                                                   BorderRadius.circular(4),
                                             ),
                                             child: Text(
-                                              _latestEEGData.length > index ? _latestEEGData[index]
-                                                  .toStringAsFixed(3),
+                                              _latestEEGData.length > index
+                                                  ? _latestEEGData[index].toStringAsFixed(3)
+                                                  : '-',
                                               style: const TextStyle(
                                                 fontFamily: 'monospace',
                                                 fontSize: 12,
@@ -551,8 +552,9 @@ class _EmotivHomePageState extends State<EmotivHomePage>
                                                   BorderRadius.circular(4),
                                             ),
                                             child: Text(
-                                              _latestEEGData.length > (index + 7) ? _latestEEGData[index + 7]
-                                                  .toStringAsFixed(3),
+                                              _latestEEGData.length > (index + 7)
+                                                  ? _latestEEGData[index + 7].toStringAsFixed(3)
+                                                  : '-',
                                               style: const TextStyle(
                                                 fontFamily: 'monospace',
                                                 fontSize: 12,
