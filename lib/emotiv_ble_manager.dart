@@ -306,7 +306,7 @@ class EmotivBLEManager {
     try {
       _updateStatus("Connecting to ${device.platformName}...");
 
-      await device.connect(timeout: const Duration(seconds: 15));
+      await device.connect(timeout: const Duration(seconds: 15), license: License.free);
       _emotivDevice = device;
       _isConnected = true;
       _connectionController.add(true);
