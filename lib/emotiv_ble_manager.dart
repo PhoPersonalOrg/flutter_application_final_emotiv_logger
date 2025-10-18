@@ -42,6 +42,7 @@ class EmotivBLEManager {
   String? btleDeviceName;
   // Uint8List? serialNumber;
   String? serialNumber;
+  Uint8List? _derivedKeyBytes;
   bool _isConnected = false;
   bool _isScanning = false;
 
@@ -70,6 +71,7 @@ class EmotivBLEManager {
   // LSL outlet components
   OutletWorker? _lslWorker;
   StreamInfo? _eegStreamInfo;
+  StreamInfo? _motionStreamInfo;
   bool _lslInitialized = false;
 
   // Add this field
@@ -107,7 +109,7 @@ class EmotivBLEManager {
       final deviceId = _emotivDevice?.remoteId.toString() ?? "emotiv_unknown";
 
       _eegStreamInfo = StreamInfoFactory.createDoubleStreamInfo(
-        "Emotiv EEG",
+        "Epoc X",
         "EEG",
         Float32ChannelFormat(),
         channelCount: 14, // 8 EEG channels from decrypted data
@@ -119,14 +121,25 @@ class EmotivBLEManager {
       _lslWorker = await OutletWorker.spawn();
 
       // Add the stream
-      final success = await _lslWorker!.addStream(_eegStreamInfo!);
+      final eegAdded = await _lslWorker!.addStream(_eegStreamInfo!);
 
-      if (success) {
+      // Motion stream info (6 channels @ ~16 Hz)
+      _motionStreamInfo = StreamInfoFactory.createDoubleStreamInfo(
+        "Epoc X Motion",
+        "Accelerometer",
+        Float32ChannelFormat(),
+        channelCount: 6,
+        nominalSRate: 16.0,
+        sourceId: deviceId,
+      );
+      final motionAdded = await _lslWorker!.addStream(_motionStreamInfo!);
+
+      if (eegAdded && motionAdded) {
         _lslInitialized = true;
         _updateStatus("LSL outlet initialized successfully");
         return true;
       } else {
-        _updateStatus("Failed to add LSL stream");
+        _updateStatus("Failed to add LSL streams");
         return false;
       }
     } catch (e) {
@@ -142,10 +155,25 @@ class EmotivBLEManager {
     }
 
     try {
-      await _lslWorker!.pushSample("Emotiv EEG", sample);
+      await _lslWorker!.pushSample("Epoc X", sample);
       return true;
     } catch (e) {
       print("LSL push error: $e");
+      return false;
+    }
+  }
+
+  // Push motion samples to LSL
+  Future<bool> _pushMotionToLSL(List<double> sample) async {
+    if (!_lslInitialized || _lslWorker == null || _motionStreamInfo == null) {
+      return false;
+    }
+
+    try {
+      await _lslWorker!.pushSample("Epoc X Motion", sample);
+      return true;
+    } catch (e) {
+      print("LSL motion push error: $e");
       return false;
     }
   }
@@ -345,14 +373,11 @@ class EmotivBLEManager {
       // List.generate(btKeyValue!.length ~/ 2, (i) {String pair = btKeyValue!.substring(i*2, i*2+2); return int.parse(pair, radix: 16).toString();}).join() // "22922233"
       // btKeyValue!.split('').map((c) => int.parse(c, radix: 16).toString()).join() // "1450202149"
 
-      // Create serial number similar to Python code
+      // Create 16-byte serial number bytes from BLE-advertised hex key (E.g. E50202E9)
       Uint8List serialNumberList = CryptoUtils.createSerialNumber(btKeyValue!);
-      String decimalStr = serialNumberList.map((b) => b.toString()).join();
-      print(decimalStr); // prints something like: 0000000000002295262333
-      // serialNumber = decimalStr; // CryptoUtils.createSerialNumber(btKeyValue); // '00000000000023322229'
-
-      serialNumber = '6566565666756557'; // TODO 2025-08-13 serialNumber - ALWAYS HARDCODED, not sure why it needs to be
-      print("TODO 2025-08-13 serialNumber - ALWAYS HARDCODED, not sure why it needs to be");
+      // Derive Epoc X key bytes per emotiv-lsl mapping (model 8)
+      _derivedKeyBytes = CryptoUtils.deriveEpocXKeyFromSerial(serialNumberList);
+      serialNumber = String.fromCharCodes(_derivedKeyBytes!); // keep legacy string for any UI/debug
       
       // Initialize file writer after successful connection
       await _initializeFileWriter();
@@ -508,7 +533,10 @@ class EmotivBLEManager {
 
     // Decrypt and decode the data
     final keyString = serialNumber;
-    final decodedValues = CryptoUtils.decryptToDoubleList(keyString!, data);
+    final keyBytes = _derivedKeyBytes;
+    final decodedValues = (keyBytes != null)
+        ? CryptoUtils.decryptToDoubleListWithKeyBytes(keyBytes, data)
+        : CryptoUtils.decryptToDoubleList(keyString!, data);
 
     if (decodedValues.isNotEmpty) {
       _eegDataController.add(decodedValues);
@@ -567,19 +595,22 @@ class EmotivBLEManager {
       // Write to motion CSV
       _motionFileWriter?.writeMotionData(motionValues);
 
-      // Push to LSL stream
-      // _pushToLSL(motionValues);
+      // Push to Motion LSL stream
+      _pushMotionToLSL(motionValues);
     }
   }
 
 
   // void _processRawData(Uint8List data) {
+  bool enableRawDebugLogging = false; // gate noisy logging
   void _processRawData(List<int> data) {
     // called by both `_processEEGData` and `_processMotionData`
     // if (!_validateData(data)) return; // I think that's okay here
-    print(
-      "_processRawData(rawData: [${data.map((v) => v.toString()).join(', ')}]",
-    );
+    if (enableRawDebugLogging) {
+      print(
+        "_processRawData(rawData: [${data.map((v) => v.toString()).join(', ')}]",
+      );
+    }
     // Process raw Motion data and emit only the decoded motion data
 
     // Decode motion data from Motion packet
@@ -653,15 +684,15 @@ class EmotivBLEManager {
     try {
       if (_lslWorker != null) {
         // Remove the stream if it was added
-        if (_eegStreamInfo != null) {
-          await _lslWorker!.removeStream("Emotiv EEG");
-        }
+        if (_eegStreamInfo != null) await _lslWorker!.removeStream("Epoc X");
+        if (_motionStreamInfo != null) await _lslWorker!.removeStream("Epoc X Motion");
 
         // Clean up the worker
         _lslWorker = null;
       }
 
       _eegStreamInfo = null;
+      _motionStreamInfo = null;
       _lslInitialized = false;
       _updateStatus("LSL outlet closed");
     } catch (e) {

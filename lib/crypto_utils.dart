@@ -70,16 +70,77 @@ class CryptoUtils {
     }
   }
 
+  /// Derive Epoc X 16-byte AES key from 16-byte serial number bytes (BLE path)
+  /// Mirrors emotiv_lsl CyKitCompatibilityHelpers model=8 mapping for BLE
+  static Uint8List deriveEpocXKeyFromSerial(Uint8List sn) {
+    assert(sn.length == 16, 'Serial number must be 16 bytes');
+    final k = <int>[
+      sn[15], sn[14], sn[12], sn[12],
+      sn[14], sn[15], sn[14], sn[12],
+      sn[15], sn[12], sn[13], sn[14],
+      sn[15], sn[14], sn[14], sn[13],
+    ];
+    return Uint8List.fromList(k);
+  }
+
+  /// Decrypt EEG payload using XOR 0x55 + AES-ECB with provided 16-byte key
+  static List<double> decryptToDoubleListWithKeyBytes(Uint8List keyBytes, Uint8List data) {
+    try {
+      assert(keyBytes.length == 16, 'AES key must be 16 bytes');
+      final key = Key(keyBytes);
+      final encrypter = Encrypter(AES(key, mode: AESMode.ecb, padding: null));
+
+      final xored = Uint8List.fromList(List<int>.generate(data.length, (i) => data[i] ^ 0x55));
+      final decryptedAll = BytesBuilder();
+      for (int c = 0; c + 16 <= xored.length; c += 16) {
+        final block = Uint8List.fromList(xored.sublist(c, c + 16));
+        decryptedAll.add(encrypter.decryptBytes(Encrypted(block)));
+      }
+      final dec = decryptedAll.toBytes();
+      if (dec.length < 32) return [];
+
+      final words = <int>[];
+      for (int i = 0; i + 1 < dec.length && words.length < 16; i += 2) {
+        words.add((dec[i + 1] << 8) | dec[i]);
+      }
+
+      final eegWords = [
+        words[1],
+        words[2],
+        words[3],
+        words[4],
+        words[5],
+        words[6],
+        words[7],
+        words[8],
+        words[9],
+        words[10],
+        words[11],
+        words[12],
+        words[13],
+        words[14],
+      ];
+
+      return eegWords.map((w) => (w * multiplier) * 0.25).toList();
+    } catch (e) {
+      print('Decryption error: $e');
+      return [];
+    }
+  }
+
   static List<double> decryptToDoubleList(String keyString, Uint8List data) {
     try {
       // final keyString ='6566565666756557'; // This is the Emotiv Epoc X's serial number, and it's hard coded. wtf is this 2025-07-31
       final key = Key.fromUtf8(keyString.padRight(16, '0').substring(0, 16));
       final encrypter = Encrypter(AES(key, mode: AESMode.ecb, padding: null));
 
-      // 2) Decrypt all 32 bytes in 16-byte blocks
+      // 2) XOR each byte with 0x55 (BLE EEG path) then decrypt in 16-byte blocks
+      final xored = Uint8List.fromList(
+        List<int>.generate(data.length, (i) => data[i] ^ 0x55),
+      );
       final decryptedAll = BytesBuilder();
-      for (int c = 0; c + 16 <= data.length; c += 16) {
-        final block = Uint8List.fromList(data.sublist(c, c + 16));
+      for (int c = 0; c + 16 <= xored.length; c += 16) {
+        final block = Uint8List.fromList(xored.sublist(c, c + 16));
         decryptedAll.add(encrypter.decryptBytes(Encrypted(block)));
       }
       final dec = decryptedAll.toBytes();

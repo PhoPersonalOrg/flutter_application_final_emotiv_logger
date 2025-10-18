@@ -57,6 +57,9 @@ class _EmotivHomePageState extends State<EmotivHomePage>
   
   // EEG data history for table display
   List<Map<String, dynamic>> _eegRecords = [];
+  // Throttle redraws
+  DateTime _lastUiUpdate = DateTime.fromMillisecondsSinceEpoch(0);
+  static const Duration _uiUpdateInterval = Duration(milliseconds: 200); // 5 Hz
 
   @override
   void initState() {
@@ -83,16 +86,28 @@ class _EmotivHomePageState extends State<EmotivHomePage>
     });
 
     _eegSubscription = _bleManager.eegDataStream.listen((data) {
-      setState(() {
-        _latestEEGData = data;
-        _addEegRecord(data);
-      });
+      final now = DateTime.now();
+      if (now.difference(_lastUiUpdate) >= _uiUpdateInterval) {
+        _lastUiUpdate = now;
+        if (mounted) {
+          setState(() {
+            _latestEEGData = data;
+            _addEegRecord(data);
+          });
+        }
+      }
     });
 
     _motionSubscription = _bleManager.motionDataStream.listen((data) {
-      setState(() {
-        _latestMotionData = data;
-      });
+      final now = DateTime.now();
+      if (now.difference(_lastUiUpdate) >= _uiUpdateInterval) {
+        _lastUiUpdate = now;
+        if (mounted) {
+          setState(() {
+            _latestMotionData = data;
+          });
+        }
+      }
     });
 
     _statusSubscription = _bleManager.statusStream.listen((status) {
