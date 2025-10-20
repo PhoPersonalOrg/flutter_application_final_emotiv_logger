@@ -89,3 +89,11 @@ flutter build apk -v
 ```
 E/flutter (19189): [ERROR:flutter/runtime/dart_vm_initializer.cc(40)] Unhandled Exception: Invalid argument(s): Couldn't resolve native function 'lsl_library_version' in 'package:liblsl/native_liblsl.dart' : Failed to load dynamic library 'liblsl.so': Failed to load dynamic library 'liblsl.so': dlopen failed: cannot locate symbol "__cxa_init_primary_exception" referenced by "/data/app/~~_XT_ZyNq8_U7kKUBdpmOTQ==/com.PhoHale.flutter_emotiv_logger-CR14shtpBN91ELiS671AVw==/base.apk!/lib/arm64-v8a/liblsl.so"....
 ```
+
+
+## New Desires
+
+1. Instead of the tables, lets impelement a new tab in the bottom of the UI that renders each channel's level as a vertical stack of scrolling line plots (one for each channel in a given modality) showing the last 10 seconds of acquired data.
+  There should be 2 banks of plots for the two modalities: EEG and Motion
+
+
