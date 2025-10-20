@@ -83,6 +83,27 @@ class CryptoUtils {
     return Uint8List.fromList(k);
   }
 
+  /// Derive 16-byte AES key directly from HID serial string (USB path)
+  /// Mirrors emotiv_lsl Python mapping for Epoc X/Plus: take ASCII bytes of serial
+  /// and map to 16-byte key using [sn[-1], sn[-2], sn[-4], sn[-4], sn[-2], sn[-1], sn[-2], sn[-4], sn[-1], sn[-4], sn[-3], sn[-2], sn[-1], sn[-2], sn[-2], sn[-3]]
+  static Uint8List deriveKeyFromUsbSerial(String serial) {
+    final sn = <int>[];
+    for (int i = 0; i < serial.length; i++) {
+      sn.add(serial.codeUnitAt(i));
+    }
+    if (sn.length < 4) {
+      throw ArgumentError('Serial too short for key derivation');
+    }
+    int n(int idxFromEnd) => sn[sn.length - idxFromEnd];
+    final k = <int>[
+      n(1), n(2), n(4), n(4),
+      n(2), n(1), n(2), n(4),
+      n(1), n(4), n(3), n(2),
+      n(1), n(2), n(2), n(3),
+    ];
+    return Uint8List.fromList(k);
+  }
+
   /// Decrypt EEG payload using XOR 0x55 + AES-ECB with provided 16-byte key
   static List<double> decryptToDoubleListWithKeyBytes(Uint8List keyBytes, Uint8List data) {
     try {

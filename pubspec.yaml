@@ -31,15 +31,15 @@ dependencies:
   flutter:
     sdk: flutter
   encrypt: ^5.0.3
-  flutter_blue_plus: ^2.0.0
   permission_handler: ^12.0.1
   liblsl: ^0.9.0
   path_provider: ^2.1.5
   file_picker: ^10.2.0
-  device_info_plus: ^12.1.0
   shared_preferences: ^2.5.3
   lsl_flutter: ^0.0.6
-
+  hid4flutter: ^0.1.3
+  device_info_plus: ^12.1.0
+  # hid: ^0.1.6
   # liblsl: ^0.5.1
 
 

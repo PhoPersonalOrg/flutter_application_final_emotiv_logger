@@ -3,10 +3,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_emotiv_logger/directory_helper.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-import 'emotiv_ble_manager.dart';
-import 'emotiv_usb_manager.dart';
 import 'file_storage.dart';
+import 'emotiv_usb_manager.dart' as usb;
+typedef EmotivBLEManager = usb.EmotivUSBManager;
 
 enum Transport { ble, usb }
 
@@ -40,7 +39,7 @@ class EmotivHomePage extends StatefulWidget {
 class _EmotivHomePageState extends State<EmotivHomePage>
     with WidgetsBindingObserver {
   final EmotivBLEManager _bleManager = EmotivBLEManager();
-  final EmotivUSBManager _usbManager = EmotivUSBManager();
+  final usb.EmotivUSBManager _usbManager = usb.EmotivUSBManager();
   List<double> _latestEEGData = [];
   List<double> _latestMotionData = [];
   String _statusMessage = "Ready to connect";
@@ -157,28 +156,9 @@ class _EmotivHomePageState extends State<EmotivHomePage>
   }
 
   Future<void> _initializeBluetooth() async {
-    // Request permissions
-    await _requestPermissions();
-
-    // Check if Bluetooth is available
-    if (await FlutterBluePlus.isAvailable == false) {
-      setState(() {
-        _statusMessage = "Bluetooth not available";
-      });
-      return;
-    }
-
-    // Check Bluetooth state
-    FlutterBluePlus.adapterState.listen((state) {
-      if (state == BluetoothAdapterState.on) {
-        setState(() {
-          _statusMessage = "Bluetooth ready";
-        });
-      } else {
-        setState(() {
-          _statusMessage = "Please enable Bluetooth";
-        });
-      }
+    // USB-focused build: BLE initialization is disabled.
+    setState(() {
+      _statusMessage = "USB mode (BLE disabled)";
     });
   }
 
