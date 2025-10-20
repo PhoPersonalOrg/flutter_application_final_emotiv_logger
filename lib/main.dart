@@ -6,6 +6,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'emotiv_ble_manager.dart';
 import 'file_storage.dart';
+import 'live_plots_tab.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -38,7 +39,6 @@ class _EmotivHomePageState extends State<EmotivHomePage>
     with WidgetsBindingObserver {
   final EmotivBLEManager _bleManager = EmotivBLEManager();
   List<double> _latestEEGData = [];
-  List<double> _latestMotionData = [];
   String _statusMessage = "Ready to connect";
   bool _isConnected = false;
   late StreamSubscription _eegSubscription;
@@ -46,7 +46,7 @@ class _EmotivHomePageState extends State<EmotivHomePage>
   late StreamSubscription _statusSubscription;
   late StreamSubscription _connectionSubscription;
 
-  bool _useLSLStreams = false;
+  // bool _useLSLStreams = false; // reserved for future use
 
   // Add this field to store the selected directory
   String? _selectedDirectory; // "/storage/emulated/0/DATA/EEG"
@@ -98,17 +98,7 @@ class _EmotivHomePageState extends State<EmotivHomePage>
       }
     });
 
-    _motionSubscription = _bleManager.motionDataStream.listen((data) {
-      final now = DateTime.now();
-      if (now.difference(_lastUiUpdate) >= _uiUpdateInterval) {
-        _lastUiUpdate = now;
-        if (mounted) {
-          setState(() {
-            _latestMotionData = data;
-          });
-        }
-      }
-    });
+    _motionSubscription = _bleManager.motionDataStream.listen((_) {});
 
     _statusSubscription = _bleManager.statusStream.listen((status) {
       setState(() {
@@ -282,6 +272,8 @@ class _EmotivHomePageState extends State<EmotivHomePage>
     }
   }
 
+  int _currentTabIndex = 0; // 0 = Status, 1 = Live Plots
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -289,14 +281,14 @@ class _EmotivHomePageState extends State<EmotivHomePage>
         title: const Text('Emotiv BLE LSL Logger'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
-          // Add settings button to app bar
           IconButton(
             icon: const Icon(Icons.settings),
             onPressed: () => _openFileSettings(),
           ),
         ],
       ),
-      body: Padding(
+      body: _currentTabIndex == 0
+          ? Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -592,6 +584,18 @@ class _EmotivHomePageState extends State<EmotivHomePage>
             ),
           ],
         ),
+      )
+          : Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: LivePlotsContent(bleManager: _bleManager),
+            ),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _currentTabIndex,
+        destinations: const [
+          NavigationDestination(icon: Icon(Icons.home), label: 'Status'),
+          NavigationDestination(icon: Icon(Icons.show_chart), label: 'Live Plots'),
+        ],
+        onDestinationSelected: (idx) => setState(() => _currentTabIndex = idx),
       ),
     );
   }
