@@ -59,25 +59,37 @@ class _ConnectionBarState extends State<ConnectionBar> {
                   ],
                 ),
                 const SizedBox(height: 8),
-                if (_found.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 24.0),
-                    child: Center(child: Text('Scanning... No devices yet')),
-                  )
-                else
-                  ..._found.map((name) => ListTile(
-                        leading: const Icon(Icons.headset),
-                        title: Text(name),
-                        trailing: ElevatedButton(
-                          onPressed: () async {
-                            try {
-                              await widget.bleManager.connectToDeviceByName(name);
-                              if (ctx.mounted) Navigator.pop(ctx);
-                            } catch (_) {}
-                          },
-                          child: const Text('Connect'),
-                        ),
-                      )),
+                StreamBuilder<List<String>>(
+                  stream: widget.bleManager.foundDevicesStream,
+                  initialData: _found,
+                  builder: (context, snapshot) {
+                    final devices = snapshot.data ?? const [];
+                    if (devices.isEmpty) {
+                      return const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 24.0),
+                        child: Center(child: Text('Scanning... No devices yet')),
+                      );
+                    }
+                    return Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: devices
+                          .map((name) => ListTile(
+                                leading: const Icon(Icons.headset),
+                                title: Text(name),
+                                trailing: ElevatedButton(
+                                  onPressed: () async {
+                                    try {
+                                      await widget.bleManager.connectToDeviceByName(name);
+                                      if (ctx.mounted) Navigator.pop(ctx);
+                                    } catch (_) {}
+                                  },
+                                  child: const Text('Connect'),
+                                ),
+                              ))
+                          .toList(),
+                    );
+                  },
+                ),
                 const SizedBox(height: 8),
                 Align(
                   alignment: Alignment.centerRight,
