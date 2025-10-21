@@ -1,10 +1,8 @@
 import 'dart:async';
 import 'dart:typed_data';
-import 'dart:io';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_emotiv_logger/generic_file_writer.dart';
 import 'package:lsl_flutter/lsl_flutter.dart';
-import 'package:path_provider/path_provider.dart';
 // import 'package:lsl_flutter/lsl_flutter.dart';
 import 'crypto_utils.dart';
 import 'eeg_file_writer.dart';
@@ -48,6 +46,8 @@ class EmotivBLEManager {
 
   // Add this field to store discovered devices
   List<BluetoothDevice> _discoveredDevices = [];
+  // Map a stable display name → device for quick lookup from UI
+  final Map<String, BluetoothDevice> _displayNameToDevice = {};
 
   // Stream controllers for data
   final StreamController<List<double>> _eegDataController =
@@ -256,6 +256,7 @@ class EmotivBLEManager {
 
     // Clear previous discoveries
     _discoveredDevices.clear();
+    _displayNameToDevice.clear();
 
     try {
       // Start scanning for devices with the specific service UUID
@@ -272,16 +273,26 @@ class EmotivBLEManager {
             .where((device) => device.platformName.isNotEmpty)
             .toList();
 
-        // Extract device names for your list
-        List<String> deviceNames = _discoveredDevices
-            .map((device) => device.platformName)
-            .toList();
+        // Build display names and mapping (prefer platformName; fallback to remoteId)
+        final List<String> deviceNames = [];
+        for (final d in _discoveredDevices) {
+          final String name = d.platformName.isNotEmpty
+              ? d.platformName
+              : d.remoteId.str;
+          // Keep latest mapping for this name
+          _displayNameToDevice[name] = d;
+          if (!deviceNames.contains(name)) {
+            deviceNames.add(name);
+          }
+        }
 
         // Update your UI with the found devices
         _updateFoundDevices(deviceNames);
 
         for (ScanResult result in results) {
-          _updateStatus("Found device: ${result.device.platformName}");
+          final pn = result.device.platformName;
+          final rid = result.device.remoteId.str;
+          _updateStatus("Found device: ${pn.isNotEmpty ? pn : rid}");
           print(
             "EmotivBLEManager: Found device: ${result.device.platformName} (${result.device.remoteId})",
           );
@@ -303,9 +314,10 @@ class EmotivBLEManager {
   // Add this new method
   Future<void> connectToDeviceByName(String deviceName) async {
     try {
-      // Find the device with the matching name
-      final device = _discoveredDevices.firstWhere(
-        (device) => device.platformName == deviceName,
+      // Prefer direct mapping populated during scan; fallback to search list
+      final BluetoothDevice? mapped = _displayNameToDevice[deviceName];
+      final BluetoothDevice device = mapped ?? _discoveredDevices.firstWhere(
+        (d) => d.platformName == deviceName || d.remoteId.str == deviceName,
         orElse: () => throw Exception('Device not found: $deviceName'),
       );
 
@@ -343,7 +355,9 @@ class EmotivBLEManager {
 
 
       // TODO 2025-08-12 - get the device serial number to use as the decoding key
-      final btKeyValue = (RegExp(r'\(([^)]+)\)').firstMatch(device.platformName)?.group(1)); // "E50202E9" -> '6566565666756557'
+      // Prefer extracting hex key from the advertised name "EPOCX (E50202E9)"
+      final String adv = device.platformName;
+      final String? btKeyValue = RegExp(r'\(([^)]+)\)').firstMatch(adv)?.group(1);
       // Emotiv Epoc+ (2025-08-13 - Apogee - from CyKit via USB Reciever)
       // [32, 13, 6, 255, 6, 38, 59, 154, 204, 166, 43, 1, 128, 0, 16, 32, 16]
       // Device Firmware = 0x6ff
@@ -374,10 +388,14 @@ class EmotivBLEManager {
       // btKeyValue!.split('').map((c) => int.parse(c, radix: 16).toString()).join() // "1450202149"
 
       // Create 16-byte serial number bytes from BLE-advertised hex key (E.g. E50202E9)
-      Uint8List serialNumberList = CryptoUtils.createSerialNumber(btKeyValue!);
-      // Derive Epoc X key bytes per emotiv-lsl mapping (model 8)
-      _derivedKeyBytes = CryptoUtils.deriveEpocXKeyFromSerial(serialNumberList);
-      serialNumber = String.fromCharCodes(_derivedKeyBytes!); // keep legacy string for any UI/debug
+      if (btKeyValue != null && btKeyValue.isNotEmpty) {
+        Uint8List serialNumberList = CryptoUtils.createSerialNumber(btKeyValue);
+        // Derive Epoc X key bytes per emotiv-lsl mapping (model 8)
+        _derivedKeyBytes = CryptoUtils.deriveEpocXKeyFromSerial(serialNumberList);
+        serialNumber = String.fromCharCodes(_derivedKeyBytes!); // keep legacy string for any UI/debug
+      } else {
+        _updateStatus("Warning: Could not extract BT key from adv name '${adv}'. Decoding may fail.");
+      }
       
       // Initialize file writer after successful connection
       await _initializeFileWriter();
