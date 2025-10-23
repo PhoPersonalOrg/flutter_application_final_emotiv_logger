@@ -33,6 +33,8 @@ class _LivePlotsContentState extends State<LivePlotsContent>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Seed with current connection state so repaint timer runs immediately when already connected
+    _isConnected = widget.bleManager.isConnected;
     _eegBuffers = List.generate(eegChannels, (_) => _FixedRingBuffer(eegCapacity));
     _motionBuffers = List.generate(motionChannels, (_) => _FixedRingBuffer(motionCapacity));
 
@@ -206,7 +208,8 @@ class _FixedRingBuffer {
   List<double> snapshot() {
     if (_count == 0) return const [];
     final out = List<double>.filled(_count, 0.0);
-    final start = (_writeIndex - _count) % _data.length;
+    // Ensure positive start index for circular buffer wrap-around
+    final start = (_writeIndex - _count + _data.length) % _data.length;
     for (int i = 0; i < _count; i++) {
       final idx = (start + i) % _data.length;
       out[i] = _data[idx];

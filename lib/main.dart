@@ -50,6 +50,8 @@ class _EmotivHomePageState extends State<EmotivHomePage>
   
   // EEG data history for table display
   List<Map<String, dynamic>> _eegRecords = [];
+  // Motion data history for table display
+  List<Map<String, dynamic>> _motionRecords = [];
   // Throttle redraws
   DateTime _lastUiUpdate = DateTime.fromMillisecondsSinceEpoch(0);
   static const Duration _uiUpdateInterval = Duration(milliseconds: 200); // 5 Hz
@@ -82,7 +84,17 @@ class _EmotivHomePageState extends State<EmotivHomePage>
       }
     });
 
-    _motionSubscription = _bleManager.motionDataStream.listen((_) {});
+    _motionSubscription = _bleManager.motionDataStream.listen((data) {
+      final now = DateTime.now();
+      if (now.difference(_lastUiUpdate) >= _uiUpdateInterval) {
+        _lastUiUpdate = now;
+        if (mounted) {
+          setState(() {
+            _addMotionRecord(data);
+          });
+        }
+      }
+    });
 
   }
 
@@ -173,6 +185,29 @@ class _EmotivHomePageState extends State<EmotivHomePage>
     }
   }
 
+  // Add Motion record to history (keep last 5)
+  void _addMotionRecord(List<double> motionData) {
+    if (motionData.length >= 6) {
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final record = {
+        'timestamp': timestamp,
+        'AccX': motionData[0],
+        'AccY': motionData[1],
+        'AccZ': motionData[2],
+        'GyroX': motionData[3],
+        'GyroY': motionData[4],
+        'GyroZ': motionData[5],
+      };
+
+      _motionRecords.add(record);
+
+      // Keep only last 5 records
+      if (_motionRecords.length > 5) {
+        _motionRecords.removeAt(0);
+      }
+    }
+  }
+
   // Settings UI removed from top bar for now; can be re-introduced later
 
   int _currentTabIndex = 0; // 0 = Live Plots, 1 = Live Tables
@@ -185,18 +220,23 @@ class _EmotivHomePageState extends State<EmotivHomePage>
         isConnected: _isConnected,
         connectedDeviceName: _connectedDeviceName,
       ),
-      body: _currentTabIndex == 0
-          ? Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: LivePlotsContent(bleManager: _bleManager),
-            )
-          : Padding(
-              padding: const EdgeInsets.all(8.0),
-              child: LiveTableTab(
-                eegRecords: _eegRecords,
-                isConnected: _isConnected,
-              ),
+      body: IndexedStack(
+        index: _currentTabIndex,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: LivePlotsContent(bleManager: _bleManager),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: LiveTableTab(
+              eegRecords: _eegRecords,
+              motionRecords: _motionRecords,
+              isConnected: _isConnected,
             ),
+          ),
+        ],
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentTabIndex,
         destinations: const [
