@@ -32,7 +32,8 @@
             "statusBar.background": "#3C2E2E",
             "statusBar.foreground": "#ffffff",
             "sideBarSectionHeader.border": "#cecece"
-        }
+        },
+        "python.languageServer": "None"
     },
     "extensions": {
         "recommendations": [
