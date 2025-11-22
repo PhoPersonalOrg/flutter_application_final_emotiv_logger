@@ -6,6 +6,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'emotiv_ble_manager.dart';
 import 'file_storage.dart';
+import 'settings/app_settings.dart';
+import 'services/network_streamer.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -37,6 +39,7 @@ class EmotivHomePage extends StatefulWidget {
 class _EmotivHomePageState extends State<EmotivHomePage>
     with WidgetsBindingObserver {
   final EmotivBLEManager _bleManager = EmotivBLEManager();
+  final AppSettingsRepository _settingsRepository = AppSettingsRepository();
   List<double> _latestEEGData = [];
   List<double> _latestMotionData = [];
   String _statusMessage = "Ready to connect";
@@ -45,8 +48,12 @@ class _EmotivHomePageState extends State<EmotivHomePage>
   late StreamSubscription _motionSubscription;
   late StreamSubscription _statusSubscription;
   late StreamSubscription _connectionSubscription;
+  late StreamSubscription _networkStatusSubscription;
 
   bool _useLSLStreams = false;
+  AppSettings _appSettings = const AppSettings();
+  NetworkStreamStatus _networkStatus = NetworkStreamStatus.disabled();
+  bool _settingsLoaded = false;
 
   // Add this field to store the selected directory
   String? _selectedDirectory; // "/storage/emulated/0/DATA/EEG"
@@ -54,7 +61,7 @@ class _EmotivHomePageState extends State<EmotivHomePage>
   // Add these new state variables
   List<String> _foundDevices = [];
   String _connectedDeviceName = '';
-  
+
   // EEG data history for table display
   List<Map<String, dynamic>> _eegRecords = [];
   // Throttle redraws
@@ -67,6 +74,7 @@ class _EmotivHomePageState extends State<EmotivHomePage>
     WidgetsBinding.instance.addObserver(this);
     _initializeBluetooth();
     _setupStreamListeners();
+    _loadAppSettings();
   }
 
   void _setupStreamListeners() {
@@ -115,6 +123,25 @@ class _EmotivHomePageState extends State<EmotivHomePage>
         _statusMessage = status;
       });
     });
+    _networkStatusSubscription = _bleManager.networkStatusStream.listen((
+      status,
+    ) {
+      if (mounted) {
+        setState(() {
+          _networkStatus = status;
+        });
+      }
+    });
+  }
+
+  Future<void> _loadAppSettings() async {
+    final loaded = await _settingsRepository.load();
+    if (!mounted) return;
+    setState(() {
+      _appSettings = loaded;
+      _settingsLoaded = true;
+    });
+    await _bleManager.updateAppSettings(loaded);
   }
 
   Future<void> _initializeBluetooth() async {
@@ -221,13 +248,15 @@ class _EmotivHomePageState extends State<EmotivHomePage>
     _motionSubscription.cancel();
     _statusSubscription.cancel();
     _connectionSubscription.cancel();
+    _networkStatusSubscription.cancel();
     _bleManager.dispose();
     super.dispose();
   }
 
   // Add EEG record to history (keep last 5)
   void _addEegRecord(List<double> eegData) {
-    if (eegData.length >= 14) { // Ensure we have all 14 channels
+    if (eegData.length >= 14) {
+      // Ensure we have all 14 channels
       final timestamp = DateTime.now().millisecondsSinceEpoch;
       final record = {
         'timestamp': timestamp,
@@ -246,9 +275,9 @@ class _EmotivHomePageState extends State<EmotivHomePage>
         'F8': eegData[12],
         'AF4': eegData[13],
       };
-      
+
       _eegRecords.add(record);
-      
+
       // Keep only last 5 records
       if (_eegRecords.length > 5) {
         _eegRecords.removeAt(0);
@@ -258,18 +287,27 @@ class _EmotivHomePageState extends State<EmotivHomePage>
 
   // Add this method to navigate to settings
   Future<void> _openFileSettings() async {
-    final result = await Navigator.push(
+    final result = await Navigator.push<SettingsResult>(
       context,
       MaterialPageRoute(
-        builder: (context) => FileSettingsScreen(_selectedDirectory),
+        builder: (context) => FileSettingsScreen(
+          initialDirectory: _selectedDirectory,
+          initialSettings: _appSettings,
+        ),
       ),
     );
 
-    // Handle the result if the user selected a new directory
-    if (result != null && result is String) {
+    if (result == null) {
+      return;
+    }
+
+    final appliedDirectory = result.selectedDirectory;
+    final appliedSettings = result.settings;
+
+    if (appliedDirectory != null) {
       setState(() {
-        print("File settings return context result: ${result}");
-        _selectedDirectory = result;
+        print("File settings return context result: $appliedDirectory");
+        _selectedDirectory = appliedDirectory;
       });
 
       // Apply the new directory to your BLE manager
@@ -280,6 +318,20 @@ class _EmotivHomePageState extends State<EmotivHomePage>
         SnackBar(content: Text('Save directory updated: $_selectedDirectory')),
       );
     }
+
+    await _settingsRepository.save(appliedSettings);
+    await _bleManager.updateAppSettings(appliedSettings);
+
+    setState(() {
+      _appSettings = appliedSettings;
+    });
+
+    final statusLabel = appliedSettings.useNetworkStream
+        ? 'Network streaming enabled (${appliedSettings.networkProtocol.name.toUpperCase()} ${appliedSettings.networkHost}:${appliedSettings.networkPort})'
+        : 'Network streaming disabled';
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(statusLabel)));
   }
 
   @override
@@ -292,7 +344,7 @@ class _EmotivHomePageState extends State<EmotivHomePage>
           // Add settings button to app bar
           IconButton(
             icon: const Icon(Icons.settings),
-            onPressed: () => _openFileSettings(),
+            onPressed: _settingsLoaded ? () => _openFileSettings() : null,
           ),
         ],
       ),
@@ -337,6 +389,13 @@ class _EmotivHomePageState extends State<EmotivHomePage>
                   ],
                 ),
               ),
+            ),
+
+            const SizedBox(height: 16),
+
+            NetworkStatusCard(
+              status: _networkStatus,
+              enabled: _appSettings.useNetworkStream,
             ),
 
             const SizedBox(height: 16),
@@ -388,46 +447,270 @@ class _EmotivHomePageState extends State<EmotivHomePage>
                                 columnSpacing: 8.0,
                                 horizontalMargin: 12.0,
                                 columns: const [
-                                  DataColumn(label: Text('Time', style: TextStyle(fontWeight: FontWeight.bold))),
-                                  DataColumn(label: Text('AF3', style: TextStyle(fontWeight: FontWeight.bold))),
-                                  DataColumn(label: Text('F7', style: TextStyle(fontWeight: FontWeight.bold))),
-                                  DataColumn(label: Text('F3', style: TextStyle(fontWeight: FontWeight.bold))),
-                                  DataColumn(label: Text('FC5', style: TextStyle(fontWeight: FontWeight.bold))),
-                                  DataColumn(label: Text('T7', style: TextStyle(fontWeight: FontWeight.bold))),
-                                  DataColumn(label: Text('P7', style: TextStyle(fontWeight: FontWeight.bold))),
-                                  DataColumn(label: Text('O1', style: TextStyle(fontWeight: FontWeight.bold))),
-                                  DataColumn(label: Text('O2', style: TextStyle(fontWeight: FontWeight.bold))),
-                                  DataColumn(label: Text('P8', style: TextStyle(fontWeight: FontWeight.bold))),
-                                  DataColumn(label: Text('T8', style: TextStyle(fontWeight: FontWeight.bold))),
-                                  DataColumn(label: Text('FC6', style: TextStyle(fontWeight: FontWeight.bold))),
-                                  DataColumn(label: Text('F4', style: TextStyle(fontWeight: FontWeight.bold))),
-                                  DataColumn(label: Text('F8', style: TextStyle(fontWeight: FontWeight.bold))),
-                                  DataColumn(label: Text('AF4', style: TextStyle(fontWeight: FontWeight.bold))),
+                                  DataColumn(
+                                    label: Text(
+                                      'Time',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  DataColumn(
+                                    label: Text(
+                                      'AF3',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  DataColumn(
+                                    label: Text(
+                                      'F7',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  DataColumn(
+                                    label: Text(
+                                      'F3',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  DataColumn(
+                                    label: Text(
+                                      'FC5',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  DataColumn(
+                                    label: Text(
+                                      'T7',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  DataColumn(
+                                    label: Text(
+                                      'P7',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  DataColumn(
+                                    label: Text(
+                                      'O1',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  DataColumn(
+                                    label: Text(
+                                      'O2',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  DataColumn(
+                                    label: Text(
+                                      'P8',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  DataColumn(
+                                    label: Text(
+                                      'T8',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  DataColumn(
+                                    label: Text(
+                                      'FC6',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  DataColumn(
+                                    label: Text(
+                                      'F4',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  DataColumn(
+                                    label: Text(
+                                      'F8',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  DataColumn(
+                                    label: Text(
+                                      'AF4',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
                                 ],
                                 rows: _eegRecords.reversed.map((record) {
                                   return DataRow(
                                     cells: [
                                       DataCell(
                                         Text(
-                                          DateTime.fromMillisecondsSinceEpoch(record['timestamp'])
-                                              .toString().substring(11, 23), // Show time only
-                                          style: const TextStyle(fontSize: 10, fontFamily: 'monospace'),
+                                          DateTime.fromMillisecondsSinceEpoch(
+                                            record['timestamp'],
+                                          ).toString().substring(
+                                            11,
+                                            23,
+                                          ), // Show time only
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            fontFamily: 'monospace',
+                                          ),
                                         ),
                                       ),
-                                      DataCell(Text(record['AF3'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
-                                      DataCell(Text(record['F7'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
-                                      DataCell(Text(record['F3'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
-                                      DataCell(Text(record['FC5'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
-                                      DataCell(Text(record['T7'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
-                                      DataCell(Text(record['P7'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
-                                      DataCell(Text(record['O1'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
-                                      DataCell(Text(record['O2'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
-                                      DataCell(Text(record['P8'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
-                                      DataCell(Text(record['T8'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
-                                      DataCell(Text(record['FC6'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
-                                      DataCell(Text(record['F4'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
-                                      DataCell(Text(record['F8'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
-                                      DataCell(Text(record['AF4'].toStringAsFixed(3), style: const TextStyle(fontSize: 10, fontFamily: 'monospace'))),
+                                      DataCell(
+                                        Text(
+                                          record['AF3'].toStringAsFixed(3),
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            fontFamily: 'monospace',
+                                          ),
+                                        ),
+                                      ),
+                                      DataCell(
+                                        Text(
+                                          record['F7'].toStringAsFixed(3),
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            fontFamily: 'monospace',
+                                          ),
+                                        ),
+                                      ),
+                                      DataCell(
+                                        Text(
+                                          record['F3'].toStringAsFixed(3),
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            fontFamily: 'monospace',
+                                          ),
+                                        ),
+                                      ),
+                                      DataCell(
+                                        Text(
+                                          record['FC5'].toStringAsFixed(3),
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            fontFamily: 'monospace',
+                                          ),
+                                        ),
+                                      ),
+                                      DataCell(
+                                        Text(
+                                          record['T7'].toStringAsFixed(3),
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            fontFamily: 'monospace',
+                                          ),
+                                        ),
+                                      ),
+                                      DataCell(
+                                        Text(
+                                          record['P7'].toStringAsFixed(3),
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            fontFamily: 'monospace',
+                                          ),
+                                        ),
+                                      ),
+                                      DataCell(
+                                        Text(
+                                          record['O1'].toStringAsFixed(3),
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            fontFamily: 'monospace',
+                                          ),
+                                        ),
+                                      ),
+                                      DataCell(
+                                        Text(
+                                          record['O2'].toStringAsFixed(3),
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            fontFamily: 'monospace',
+                                          ),
+                                        ),
+                                      ),
+                                      DataCell(
+                                        Text(
+                                          record['P8'].toStringAsFixed(3),
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            fontFamily: 'monospace',
+                                          ),
+                                        ),
+                                      ),
+                                      DataCell(
+                                        Text(
+                                          record['T8'].toStringAsFixed(3),
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            fontFamily: 'monospace',
+                                          ),
+                                        ),
+                                      ),
+                                      DataCell(
+                                        Text(
+                                          record['FC6'].toStringAsFixed(3),
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            fontFamily: 'monospace',
+                                          ),
+                                        ),
+                                      ),
+                                      DataCell(
+                                        Text(
+                                          record['F4'].toStringAsFixed(3),
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            fontFamily: 'monospace',
+                                          ),
+                                        ),
+                                      ),
+                                      DataCell(
+                                        Text(
+                                          record['F8'].toStringAsFixed(3),
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            fontFamily: 'monospace',
+                                          ),
+                                        ),
+                                      ),
+                                      DataCell(
+                                        Text(
+                                          record['AF4'].toStringAsFixed(3),
+                                          style: const TextStyle(
+                                            fontSize: 10,
+                                            fontFamily: 'monospace',
+                                          ),
+                                        ),
+                                      ),
                                     ],
                                   );
                                 }).toList(),
@@ -487,7 +770,15 @@ class _EmotivHomePageState extends State<EmotivHomePage>
                                   ),
                                 ),
                                 ...List.generate(7, (index) {
-                                  final labels = ['AF3','F7','F3','FC5','T7','P7','O1'];
+                                  final labels = [
+                                    'AF3',
+                                    'F7',
+                                    'F3',
+                                    'FC5',
+                                    'T7',
+                                    'P7',
+                                    'O1',
+                                  ];
                                   return Padding(
                                     padding: const EdgeInsets.symmetric(
                                       vertical: 1.0,
@@ -516,7 +807,8 @@ class _EmotivHomePageState extends State<EmotivHomePage>
                                             ),
                                             child: Text(
                                               _latestEEGData.length > index
-                                                  ? _latestEEGData[index].toStringAsFixed(3)
+                                                  ? _latestEEGData[index]
+                                                        .toStringAsFixed(3)
                                                   : '-',
                                               style: const TextStyle(
                                                 fontFamily: 'monospace',
@@ -539,7 +831,15 @@ class _EmotivHomePageState extends State<EmotivHomePage>
                                   ),
                                 ),
                                 ...List.generate(7, (index) {
-                                  final labels = ['O2','P8','T8','FC6','F4','F8','AF4'];
+                                  final labels = [
+                                    'O2',
+                                    'P8',
+                                    'T8',
+                                    'FC6',
+                                    'F4',
+                                    'F8',
+                                    'AF4',
+                                  ];
                                   return Padding(
                                     padding: const EdgeInsets.symmetric(
                                       vertical: 1.0,
@@ -567,8 +867,10 @@ class _EmotivHomePageState extends State<EmotivHomePage>
                                                   BorderRadius.circular(4),
                                             ),
                                             child: Text(
-                                              _latestEEGData.length > (index + 7)
-                                                  ? _latestEEGData[index + 7].toStringAsFixed(3)
+                                              _latestEEGData.length >
+                                                      (index + 7)
+                                                  ? _latestEEGData[index + 7]
+                                                        .toStringAsFixed(3)
                                                   : '-',
                                               style: const TextStyle(
                                                 fontFamily: 'monospace',
@@ -592,6 +894,48 @@ class _EmotivHomePageState extends State<EmotivHomePage>
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class NetworkStatusCard extends StatelessWidget {
+  final NetworkStreamStatus status;
+  final bool enabled;
+
+  const NetworkStatusCard({
+    super.key,
+    required this.status,
+    required this.enabled,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final iconData = !enabled
+        ? Icons.cloud_off
+        : status.connected
+        ? Icons.cloud_done
+        : Icons.cloud_upload;
+    final color = !enabled
+        ? Colors.grey
+        : status.connected
+        ? Colors.green
+        : Colors.orange;
+    final subtitle = !enabled
+        ? 'Network streaming disabled in settings'
+        : (status.message ?? 'Preparing network stream...');
+
+    return Card(
+      child: ListTile(
+        leading: Icon(iconData, color: color),
+        title: const Text('Network Stream'),
+        subtitle: Text(subtitle),
+        trailing: enabled
+            ? Text(
+                status.protocol.name.toUpperCase(),
+                style: TextStyle(color: color, fontWeight: FontWeight.bold),
+              )
+            : null,
       ),
     );
   }
@@ -734,31 +1078,132 @@ class BluetoothControlWidget extends StatelessWidget {
 
 ///////////////////////////////////////////////////////////////////////////
 // Settings Screen
+class SettingsResult {
+  const SettingsResult({this.selectedDirectory, required this.settings});
+
+  final String? selectedDirectory;
+  final AppSettings settings;
+}
+
 class FileSettingsScreen extends StatefulWidget {
-  FileSettingsScreen(String? selectedDirectory);
+  const FileSettingsScreen({
+    super.key,
+    required this.initialDirectory,
+    required this.initialSettings,
+  });
+
+  final String? initialDirectory;
+  final AppSettings initialSettings;
 
   @override
-  _FileSettingsScreenState createState() => _FileSettingsScreenState();
+  State<FileSettingsScreen> createState() => _FileSettingsScreenState();
 }
 
 class _FileSettingsScreenState extends State<FileSettingsScreen> {
-  String? _selectedDirectory;
+  late String? _selectedDirectory;
+  late bool _useNetworkStream;
+  late TextEditingController _hostController;
+  late TextEditingController _portController;
+  late NetworkProtocol _protocol;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedDirectory = widget.initialDirectory;
+    _useNetworkStream = widget.initialSettings.useNetworkStream;
+    _hostController = TextEditingController(
+      text: widget.initialSettings.networkHost,
+    );
+    _portController = TextEditingController(
+      text: widget.initialSettings.networkPort.toString(),
+    );
+    _protocol = widget.initialSettings.networkProtocol;
+  }
+
+  @override
+  void dispose() {
+    _hostController.dispose();
+    _portController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('File Settings')),
-      body: Column(
+      appBar: AppBar(title: const Text('Settings')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
         children: [
-          ListTile(
-            title: Text('Save Directory'),
-            subtitle: Text(_selectedDirectory ?? 'Default (App Documents)'),
-            trailing: Icon(Icons.folder),
-            onTap: () => _selectDirectory(context),
+          Card(
+            child: ListTile(
+              title: const Text('Save Directory'),
+              subtitle: Text(_selectedDirectory ?? 'Default (App Documents)'),
+              trailing: const Icon(Icons.folder),
+              onTap: () => _selectDirectory(context),
+            ),
           ),
+          const SizedBox(height: 16),
+          SwitchListTile(
+            value: _useNetworkStream,
+            title: const Text('Enable Network Streaming'),
+            subtitle: const Text(
+              'Send EEG and motion samples to a remote server with timestamps.',
+            ),
+            onChanged: (value) {
+              setState(() {
+                _useNetworkStream = value;
+              });
+            },
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _hostController,
+            enabled: _useNetworkStream,
+            decoration: const InputDecoration(
+              labelText: 'Server Host',
+              hintText: '192.168.0.10',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _portController,
+            enabled: _useNetworkStream,
+            decoration: const InputDecoration(
+              labelText: 'Server Port',
+              border: OutlineInputBorder(),
+            ),
+            keyboardType: TextInputType.number,
+          ),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<NetworkProtocol>(
+            value: _protocol,
+            decoration: const InputDecoration(
+              labelText: 'Protocol',
+              border: OutlineInputBorder(),
+            ),
+            items: NetworkProtocol.values
+                .map(
+                  (protocol) => DropdownMenuItem(
+                    value: protocol,
+                    child: Text(protocol.name.toUpperCase()),
+                  ),
+                )
+                .toList(),
+            onChanged: _useNetworkStream
+                ? (value) {
+                    if (value != null) {
+                      setState(() {
+                        _protocol = value;
+                      });
+                    }
+                  }
+                : null,
+          ),
+          const SizedBox(height: 24),
           ElevatedButton(
             onPressed: () => _applySettings(context),
-            child: Text('Apply Settings'),
+            child: const Text('Apply Settings'),
           ),
         ],
       ),
@@ -835,8 +1280,38 @@ class _FileSettingsScreenState extends State<FileSettingsScreen> {
   }
 
   Future<void> _applySettings(BuildContext context) async {
-    // Apply to your BLE manager
-    // emotivBLEManager.setCustomSaveDirectory(_selectedDirectory);
-    Navigator.pop(context, _selectedDirectory);
+    final trimmedHost = _hostController.text.trim();
+    final trimmedPort = _portController.text.trim();
+    final parsedPort = int.tryParse(trimmedPort);
+
+    if (_useNetworkStream) {
+      if (trimmedHost.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please provide a server host')),
+        );
+        return;
+      }
+      if (parsedPort == null || parsedPort <= 0 || parsedPort > 65535) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please enter a valid port (1-65535)')),
+        );
+        return;
+      }
+    }
+
+    final updatedSettings = widget.initialSettings.copyWith(
+      useNetworkStream: _useNetworkStream,
+      networkHost: trimmedHost.isEmpty ? AppSettings.defaultHost : trimmedHost,
+      networkPort: parsedPort ?? AppSettings.defaultPort,
+      networkProtocol: _protocol,
+    );
+
+    Navigator.pop(
+      context,
+      SettingsResult(
+        selectedDirectory: _selectedDirectory,
+        settings: updatedSettings,
+      ),
+    );
   }
 }
