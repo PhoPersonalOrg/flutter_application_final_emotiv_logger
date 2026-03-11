@@ -32,8 +32,8 @@ class AppSettings {
   final int networkPort;
   final NetworkProtocol networkProtocol;
 
-  static const String defaultHost = '192.168.0.100';
-  static const int defaultPort = 7000;
+  static const String defaultHost = 'apogee.tailc8d2c6.ts.net';
+  static const int defaultPort = 9878;
 
   AppSettings copyWith({
     bool? useNetworkStream,

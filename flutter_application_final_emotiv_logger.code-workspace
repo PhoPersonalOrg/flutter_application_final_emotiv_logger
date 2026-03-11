@@ -33,7 +33,8 @@
             "statusBar.foreground": "#ffffff",
             "sideBarSectionHeader.border": "#cecece"
         },
-        "python.languageServer": "None"
+        "python.languageServer": "None",
+        "specstory.cloudSync.enabled": "never"
     },
     "extensions": {
         "recommendations": [
