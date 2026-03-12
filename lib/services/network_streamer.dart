@@ -145,10 +145,10 @@ class NetworkStreamer {
       'timestamp': timestampSeconds,
       'deviceId': deviceId,
       'values': values,
-      if (metadata != null) 'meta': metadata,
+      'meta': ?metadata,
     };
 
-    final data = utf8.encode(jsonEncode(payload) + '\n');
+    final data = utf8.encode('${jsonEncode(payload)}\n');
 
     try {
       if (protocol == NetworkProtocol.udp) {
