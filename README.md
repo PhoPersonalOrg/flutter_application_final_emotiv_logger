@@ -5,6 +5,47 @@ A new Flutter project that tries to decrypt Emotiv Epoc X (or Emotiv Epoc+) data
 Should work on Android, iOS, linux, and more!
 
 
+## Network Streaming (LSL Alternative)
+
+Android builds that cannot use the LabStreamingLayer plugin can still mirror EEG
+and motion samples to another machine. Open the in-app settings (gear icon) to:
+
+- Enable or disable the network stream
+- Enter the destination host, port, and choose UDP or TCP
+- Confirm the connection state from the **Network Stream** card on the home page
+
+Every sample is serialized as newline-delimited JSON that includes timestamps,
+channel count, and sample rate:
+
+```
+{"type":"eeg","timestamp":1732122331.123,"deviceId":"EpocX","values":[...],"meta":{"sampleRate":128.0,"channelCount":14}}
+```
+
+Use any server that can accept UDP/TCP JSON blobs to ingest the stream.
+
+### Test Receiver Script
+
+A Python receiver script is provided at `EXTERNAL/SCRIPTS/test_reciever.py` that can:
+- Receive network stream data from the Flutter app
+- Optionally rebroadcast to LSL outlets for compatibility with LSL-based tools
+
+**Basic usage (network only):**
+```bash
+python EXTERNAL/SCRIPTS/test_reciever.py --port 9878
+```
+
+**With LSL rebroadcast:**
+```bash
+pip install pylsl
+python EXTERNAL/SCRIPTS/test_reciever.py --lsl --port 9878
+```
+
+When LSL rebroadcast is enabled, the script creates two LSL outlets:
+- **Epoc X** (EEG): 14 channels @ 128 Hz, type='EEG'
+- **Epoc X Motion** (SIGNAL): 6 channels @ 16 Hz, type='SIGNAL'
+
+These streams are compatible with standard LSL tools like LabRecorder, BSL Stream Viewer, and MNE-LSL.
+
 ## Getting Started
 
 This project is a starting point for a Flutter application.
@@ -18,6 +59,17 @@ For help getting started with Flutter development, view the
 [online documentation](https://docs.flutter.dev/), which offers tutorials,
 samples, guidance on mobile development, and a full API reference.
 
+
+# Setting up Flutter on macOS:
+You need to i nstall the flutter version manager `fvm`
+```bash
+brew tap leoafarias/fvm
+brew install fvm
+fvm install fvm install 3.42.0-0.0.pre
+# Use a version in your project
+fvm use fvm install 3.42.0-0.0.pre
+
+```
 
 
 ## Capturing Bluetooth Emotiv EEG Logs
@@ -89,3 +141,22 @@ flutter build apk -v
 ```
 E/flutter (19189): [ERROR:flutter/runtime/dart_vm_initializer.cc(40)] Unhandled Exception: Invalid argument(s): Couldn't resolve native function 'lsl_library_version' in 'package:liblsl/native_liblsl.dart' : Failed to load dynamic library 'liblsl.so': Failed to load dynamic library 'liblsl.so': dlopen failed: cannot locate symbol "__cxa_init_primary_exception" referenced by "/data/app/~~_XT_ZyNq8_U7kKUBdpmOTQ==/com.PhoHale.flutter_emotiv_logger-CR14shtpBN91ELiS671AVw==/base.apk!/lib/arm64-v8a/liblsl.so"....
 ```
+
+### Simple Network Receiver Example
+
+For a minimal receiver without LSL rebroadcast:
+
+```python
+import json, socket
+
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.bind(("0.0.0.0", 7000))
+
+while True:
+    data, addr = sock.recvfrom(65535)
+    for line in data.splitlines():
+        sample = json.loads(line)
+        print(sample["type"], sample["timestamp"], sample["values"])
+```
+
+For full-featured receiver with LSL rebroadcast support, use `EXTERNAL/SCRIPTS/test_reciever.py` (see above).

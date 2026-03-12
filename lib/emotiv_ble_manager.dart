@@ -4,11 +4,11 @@ import 'dart:io';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_emotiv_logger/generic_file_writer.dart';
 import 'package:lsl_flutter/lsl_flutter.dart';
-import 'package:path_provider/path_provider.dart';
-// import 'package:lsl_flutter/lsl_flutter.dart';
 import 'crypto_utils.dart';
 import 'eeg_file_writer.dart';
 import 'motion_file_writer.dart';
+import 'services/network_streamer.dart';
+import 'settings/app_settings.dart';
 
 class EmotivBLEManager {
   // TODO: get the device serial number dynamically upon connection using the following code:
@@ -16,8 +16,10 @@ class EmotivBLEManager {
 
   // UUIDs from your Swift code
   static const String controlUuid = "81072F40-9F3D-11E3-A9DC-0002A5D5C51B";
-  static const String eegDataUuid = "81072F41-9F3D-11E3-A9DC-0002A5D5C51B"; // UUID of the main data stream with ID 0x10
-  static const String motionDataUuid = "81072F42-9F3D-11E3-A9DC-0002A5D5C51B"; // UUID of the gyro/other? data stream with ID 0x20
+  static const String eegDataUuid =
+      "81072F41-9F3D-11E3-A9DC-0002A5D5C51B"; // UUID of the main data stream with ID 0x10
+  static const String motionDataUuid =
+      "81072F42-9F3D-11E3-A9DC-0002A5D5C51B"; // UUID of the gyro/other? data stream with ID 0x20
 
   // service.characteristics[0].uuid.toString().toUpperCase()
   // "2A00"
@@ -61,21 +63,31 @@ class EmotivBLEManager {
   // Add a stream controller for found devices
   final StreamController<List<String>> _foundDevicesController =
       StreamController<List<String>>.broadcast();
+  final StreamController<NetworkStreamStatus> _networkStatusController =
+      StreamController<NetworkStreamStatus>.broadcast();
 
   // File writer instance
   EEGFileWriter? _eegFileWriter;
   MotionFileWriter? _motionFileWriter;
   GenericFileWriter? _rawFileWriter;
 
-
   // LSL outlet components
   OutletWorker? _lslWorker;
   StreamInfo? _eegStreamInfo;
   StreamInfo? _motionStreamInfo;
   bool _lslInitialized = false;
+  
+  // LSL monitoring counters
+  int _lslEegPushCount = 0;
+  int _lslEegPushFailures = 0;
+  int _lslMotionPushCount = 0;
+  int _lslMotionPushFailures = 0;
 
   // Add this field
   String? _customSaveDirectory;
+  AppSettings _appSettings = const AppSettings();
+  NetworkStreamer? _networkStreamer;
+  StreamSubscription<NetworkStreamStatus>? _networkStatusSubscription;
 
   // Getters for streams
   Stream<List<double>> get eegDataStream => _eegDataController.stream;
@@ -83,10 +95,13 @@ class EmotivBLEManager {
   Stream<bool> get connectionStream => _connectionController.stream;
   Stream<String> get statusStream => _statusController.stream;
   Stream<List<String>> get foundDevicesStream => _foundDevicesController.stream;
+  Stream<NetworkStreamStatus> get networkStatusStream =>
+      _networkStatusController.stream;
 
   bool get isConnected => _isConnected;
   bool get isScanning => _isScanning;
-//   bool get serialNumber => _serialNumber;
+  bool get isLSLInitialized => _lslInitialized;
+  //   bool get serialNumber => _serialNumber;
 
   // Add method to set custom directory
   void setCustomSaveDirectory(String? directoryPath) {
@@ -94,6 +109,56 @@ class EmotivBLEManager {
       "EmotivBLEManager: Updating custom save directory directoryPath: $directoryPath",
     );
     _customSaveDirectory = directoryPath;
+  }
+
+  Future<void> updateAppSettings(AppSettings settings) async {
+    _appSettings = settings;
+
+    if (!settings.useNetworkStream) {
+      await _teardownNetworkStreamer();
+      return;
+    }
+
+    final needsNewStreamer =
+        _networkStreamer == null ||
+        !_networkStreamer!.matchesDestination(
+          otherHost: settings.networkHost,
+          otherPort: settings.networkPort,
+          otherProtocol: settings.networkProtocol,
+        );
+
+    if (needsNewStreamer) {
+      await _teardownNetworkStreamer();
+      _networkStreamer = NetworkStreamer(
+        host: settings.networkHost,
+        port: settings.networkPort,
+        protocol: settings.networkProtocol,
+        deviceId: serialNumber,
+      );
+      _networkStatusSubscription = _networkStreamer!.statusStream.listen(
+        _networkStatusController.add,
+      );
+    } else {
+      _networkStreamer?.updateDeviceId(serialNumber);
+    }
+
+    try {
+      await _networkStreamer?.start();
+    } catch (_) {
+      // Status stream already notified listeners; swallow to avoid crashes.
+    }
+  }
+
+  Future<void> _teardownNetworkStreamer() async {
+    await _networkStatusSubscription?.cancel();
+    _networkStatusSubscription = null;
+    if (_networkStreamer != null) {
+      await _networkStreamer!.dispose();
+      _networkStreamer = null;
+    }
+    if (!_networkStatusController.isClosed) {
+      _networkStatusController.add(NetworkStreamStatus.disabled());
+    }
   }
 
   // Initialize LSL outlet for EEG data streaming
@@ -104,46 +169,137 @@ class EmotivBLEManager {
         return true;
       }
 
+      final platform = Platform.isIOS ? "iOS" : (Platform.isAndroid ? "Android" : "Unknown");
+      _updateStatus("Initializing LSL outlet on $platform...");
+
       // Create EEG stream info - determine channels from Emotiv data
       // Based on the crypto_utils processing, each 16-byte chunk produces 8 values
       final deviceId = _emotivDevice?.remoteId.toString() ?? "emotiv_unknown";
+      print("LSL: Creating EEG stream info for device: $deviceId");
 
-      _eegStreamInfo = StreamInfoFactory.createDoubleStreamInfo(
-        "Epoc X",
-        "EEG",
-        Float32ChannelFormat(),
-        channelCount: 14, // 8 EEG channels from decrypted data
-        nominalSRate: 128.0, // Emotiv typically runs at 128 Hz
-        sourceId: deviceId,
-      );
-
-      // Spawn LSL worker
-      _lslWorker = await OutletWorker.spawn();
-
-      // Add the stream
-      final eegAdded = await _lslWorker!.addStream(_eegStreamInfo!);
-
-      // Motion stream info (6 channels @ ~16 Hz)
-      _motionStreamInfo = StreamInfoFactory.createDoubleStreamInfo(
-        "Epoc X Motion",
-        "Accelerometer",
-        Float32ChannelFormat(),
-        channelCount: 6,
-        nominalSRate: 16.0,
-        sourceId: deviceId,
-      );
-      final motionAdded = await _lslWorker!.addStream(_motionStreamInfo!);
-
-      if (eegAdded && motionAdded) {
-        _lslInitialized = true;
-        _updateStatus("LSL outlet initialized successfully");
-        return true;
-      } else {
-        _updateStatus("Failed to add LSL streams");
+      try {
+        _eegStreamInfo = StreamInfoFactory.createDoubleStreamInfo(
+          "Epoc X",
+          "EEG",
+          Float32ChannelFormat(),
+          channelCount: 14, // 14 EEG channels from decrypted data
+          nominalSRate: 128.0, // Emotiv typically runs at 128 Hz
+          sourceId: deviceId,
+        );
+        print("LSL: EEG stream info created successfully (14 channels, 128 Hz)");
+      } catch (e) {
+        _updateStatus("LSL: Failed to create EEG stream info: $e");
+        print("LSL: Error creating EEG stream info: $e");
         return false;
       }
-    } catch (e) {
-      _updateStatus("Error initializing LSL outlet: $e");
+
+      // Spawn LSL worker with timeout
+      try {
+        print("LSL: Spawning OutletWorker...");
+        _lslWorker = await OutletWorker.spawn().timeout(
+          const Duration(seconds: 10),
+          onTimeout: () {
+            throw TimeoutException("LSL worker spawn timed out after 10 seconds");
+          },
+        );
+        print("LSL: OutletWorker spawned successfully");
+      } catch (e) {
+        _updateStatus("LSL: Failed to spawn worker: $e");
+        print("LSL: Error spawning OutletWorker: $e");
+        print("LSL: Platform: $platform");
+        _eegStreamInfo = null;
+        return false;
+      }
+
+      // Add the EEG stream
+      bool eegAdded = false;
+      try {
+        print("LSL: Adding EEG stream to worker...");
+        eegAdded = await _lslWorker!.addStream(_eegStreamInfo!).timeout(
+          const Duration(seconds: 5),
+          onTimeout: () {
+            throw TimeoutException("Adding EEG stream timed out after 5 seconds");
+          },
+        );
+        if (!eegAdded) {
+          _updateStatus("LSL: Failed to add EEG stream");
+          print("LSL: addStream returned false for EEG stream");
+          return false;
+        }
+        print("LSL: EEG stream added successfully");
+      } catch (e) {
+        _updateStatus("LSL: Error adding EEG stream: $e");
+        print("LSL: Error adding EEG stream: $e");
+        return false;
+      }
+
+      // Motion stream info (6 channels @ ~16 Hz)
+      try {
+        print("LSL: Creating motion stream info...");
+        _motionStreamInfo = StreamInfoFactory.createDoubleStreamInfo(
+          "Epoc X Motion",
+          "Accelerometer",
+          Float32ChannelFormat(),
+          channelCount: 6,
+          nominalSRate: 16.0,
+          sourceId: deviceId,
+        );
+        print("LSL: Motion stream info created successfully (6 channels, 16 Hz)");
+      } catch (e) {
+        _updateStatus("LSL: Failed to create motion stream info: $e");
+        print("LSL: Error creating motion stream info: $e");
+        // Continue without motion stream - EEG is more important
+        _motionStreamInfo = null;
+      }
+
+      // Add motion stream if created
+      bool motionAdded = false;
+      if (_motionStreamInfo != null) {
+        try {
+          print("LSL: Adding motion stream to worker...");
+          motionAdded = await _lslWorker!.addStream(_motionStreamInfo!).timeout(
+            const Duration(seconds: 5),
+            onTimeout: () {
+              throw TimeoutException("Adding motion stream timed out after 5 seconds");
+            },
+          );
+          if (motionAdded) {
+            print("LSL: Motion stream added successfully");
+          } else {
+            print("LSL: Warning: addStream returned false for motion stream");
+          }
+        } catch (e) {
+          _updateStatus("LSL: Error adding motion stream: $e");
+          print("LSL: Error adding motion stream: $e");
+          // Continue - motion stream is optional
+        }
+      }
+
+      if (eegAdded) {
+        _lslInitialized = true;
+        // Reset push counters
+        _lslEegPushCount = 0;
+        _lslEegPushFailures = 0;
+        _lslMotionPushCount = 0;
+        _lslMotionPushFailures = 0;
+        final streamsStatus = motionAdded ? "EEG and Motion" : "EEG (Motion failed)";
+        _updateStatus("LSL outlet initialized successfully on $platform - $streamsStatus streams active");
+        print("LSL: Initialization complete - $streamsStatus streams ready");
+        _logLSLStatus();
+        return true;
+      } else {
+        _updateStatus("LSL: Failed to initialize - EEG stream not added");
+        print("LSL: Initialization failed - EEG stream was not added");
+        return false;
+      }
+    } catch (e, stackTrace) {
+      _updateStatus("LSL: Critical error initializing outlet: $e");
+      print("LSL: Critical error: $e");
+      print("LSL: Stack trace: $stackTrace");
+      _lslInitialized = false;
+      _lslWorker = null;
+      _eegStreamInfo = null;
+      _motionStreamInfo = null;
       return false;
     }
   }
@@ -154,11 +310,23 @@ class EmotivBLEManager {
       return false;
     }
 
+    // Validate sample length matches expected channel count
+    const expectedChannels = 14;
+    if (sample.length != expectedChannels) {
+      print("LSL: EEG sample length mismatch - expected $expectedChannels, got ${sample.length}");
+      return false;
+    }
+
     try {
       await _lslWorker!.pushSample("Epoc X", sample);
+      _lslEegPushCount++;
       return true;
     } catch (e) {
-      print("LSL push error: $e");
+      _lslEegPushFailures++;
+      print("LSL: EEG push error: $e");
+      print("LSL: Sample length: ${sample.length}, channels: ${sample.take(3).join(', ')}...");
+      print("LSL: EEG push stats - Success: $_lslEegPushCount, Failures: $_lslEegPushFailures");
+      // Don't mark as failed on single push error - LSL may recover
       return false;
     }
   }
@@ -169,17 +337,67 @@ class EmotivBLEManager {
       return false;
     }
 
+    // Validate sample length matches expected channel count
+    const expectedChannels = 6;
+    if (sample.length != expectedChannels) {
+      print("LSL: Motion sample length mismatch - expected $expectedChannels, got ${sample.length}");
+      return false;
+    }
+
     try {
       await _lslWorker!.pushSample("Epoc X Motion", sample);
+      _lslMotionPushCount++;
       return true;
     } catch (e) {
-      print("LSL motion push error: $e");
+      _lslMotionPushFailures++;
+      print("LSL: Motion push error: $e");
+      print("LSL: Sample length: ${sample.length}, channels: ${sample.take(3).join(', ')}...");
+      print("LSL: Motion push stats - Success: $_lslMotionPushCount, Failures: $_lslMotionPushFailures");
+      // Don't mark as failed on single push error - LSL may recover
       return false;
     }
   }
 
-  Future<void> _initializeFileWriter() async {
+  // Get LSL status information
+  Map<String, dynamic> getLSLStatus() {
+    return {
+      'initialized': _lslInitialized,
+      'workerActive': _lslWorker != null,
+      'eegStreamReady': _eegStreamInfo != null,
+      'motionStreamReady': _motionStreamInfo != null,
+      'eegPushCount': _lslEegPushCount,
+      'eegPushFailures': _lslEegPushFailures,
+      'motionPushCount': _lslMotionPushCount,
+      'motionPushFailures': _lslMotionPushFailures,
+      'eegStreamName': _eegStreamInfo != null ? "Epoc X" : null,
+      'motionStreamName': _motionStreamInfo != null ? "Epoc X Motion" : null,
+    };
+  }
 
+  // Check if LSL outlet is healthy (initialized and worker active)
+  bool isLSLHealthy() {
+    return _lslInitialized && _lslWorker != null && _eegStreamInfo != null;
+  }
+
+  // Log LSL status for debugging
+  void _logLSLStatus() {
+    if (_lslInitialized) {
+      final status = getLSLStatus();
+      print("LSL Status: ${status}");
+      final eegSuccessRate = _lslEegPushCount > 0 
+          ? (_lslEegPushCount / (_lslEegPushCount + _lslEegPushFailures) * 100).toStringAsFixed(1)
+          : "N/A";
+      final motionSuccessRate = _lslMotionPushCount > 0
+          ? (_lslMotionPushCount / (_lslMotionPushCount + _lslMotionPushFailures) * 100).toStringAsFixed(1)
+          : "N/A";
+      print("LSL: EEG success rate: $eegSuccessRate% ($_lslEegPushCount/$_lslEegPushFailures)");
+      print("LSL: Motion success rate: $motionSuccessRate% ($_lslMotionPushCount/$_lslMotionPushFailures)");
+    } else {
+      print("LSL: Not initialized");
+    }
+  }
+
+  Future<void> _initializeFileWriter() async {
     try {
       // Dispose existing file writer if any
       await _eegFileWriter?.dispose();
@@ -201,8 +419,6 @@ class EmotivBLEManager {
       _eegFileWriter = null;
     }
 
-
-
     try {
       // Dispose existing file writer if any
       await _motionFileWriter?.dispose();
@@ -217,11 +433,15 @@ class EmotivBLEManager {
       final motionSuccess = await _motionFileWriter!.initialize();
 
       if (!motionSuccess) {
-        _updateStatus("EmotivBLEManager: Failed to initialize motion file writer");
+        _updateStatus(
+          "EmotivBLEManager: Failed to initialize motion file writer",
+        );
         _motionFileWriter = null;
       }
     } catch (e) {
-      _updateStatus("EmotivBLEManager: Error initializing motion file writer: $e");
+      _updateStatus(
+        "EmotivBLEManager: Error initializing motion file writer: $e",
+      );
       _motionFileWriter = null;
     }
 
@@ -245,7 +465,6 @@ class EmotivBLEManager {
       _updateStatus("EmotivBLEManager: Error initializing raw file writer: $e");
       _rawFileWriter = null;
     }
-
   }
 
   Future<void> startScanning() async {
@@ -287,7 +506,8 @@ class EmotivBLEManager {
           );
 
           // Connect to the first Emotiv device found
-				if (_shouldAutoConnectToFirst && result.device.platformName.isNotEmpty) {
+          if (_shouldAutoConnectToFirst &&
+              result.device.platformName.isNotEmpty) {
             stopScanning();
             connectToDevice(result.device);
             break;
@@ -334,16 +554,20 @@ class EmotivBLEManager {
     try {
       _updateStatus("Connecting to ${device.platformName}...");
 
-      await device.connect(timeout: const Duration(seconds: 15), license: License.free);
+      await device.connect(
+        timeout: const Duration(seconds: 15),
+        license: License.free,
+      );
       _emotivDevice = device;
       _isConnected = true;
       _connectionController.add(true);
 
       _updateStatus("Connected to ${device.platformName}");
 
-
       // TODO 2025-08-12 - get the device serial number to use as the decoding key
-      final btKeyValue = (RegExp(r'\(([^)]+)\)').firstMatch(device.platformName)?.group(1)); // "E50202E9" -> '6566565666756557'
+      final btKeyValue = (RegExp(r'\(([^)]+)\)')
+          .firstMatch(device.platformName)
+          ?.group(1)); // "E50202E9" -> '6566565666756557'
       // Emotiv Epoc+ (2025-08-13 - Apogee - from CyKit via USB Reciever)
       // [32, 13, 6, 255, 6, 38, 59, 154, 204, 166, 43, 1, 128, 0, 16, 32, 16]
       // Device Firmware = 0x6ff
@@ -351,7 +575,6 @@ class EmotivBLEManager {
       // Using Device: EEG Signals
       // Serial Number: UD20221202006756
       // AES Key = [54, 53, 53, 55, 55, 55, 53, 54, 54, 54, 53, 53, 54, 54, 53, 54]
-
 
       // // Emotiv EpocX (2025-08-13 - Apogee - from CyKit via USB Reciever)
       // [32, 32, 6, 255, 7, 32, 229, 2, 2, 233, 43, 1, 128, 0, 16, 32, 16]
@@ -365,7 +588,6 @@ class EmotivBLEManager {
       // Product: 0x7ae0
       // AES Key = [54, 53, 53, 55, 55, 55, 53, 54, 54, 54, 53, 53, 54, 54, 53, 54]
 
-
       // "Found device: EPOCX (E50202E9)"
       // "Found device: EPOC+ (3B9ACCA6)"
       // serialNumber = _emotivDevice.advName
@@ -377,8 +599,11 @@ class EmotivBLEManager {
       Uint8List serialNumberList = CryptoUtils.createSerialNumber(btKeyValue!);
       // Derive Epoc X key bytes per emotiv-lsl mapping (model 8)
       _derivedKeyBytes = CryptoUtils.deriveEpocXKeyFromSerial(serialNumberList);
-      serialNumber = String.fromCharCodes(_derivedKeyBytes!); // keep legacy string for any UI/debug
-      
+      serialNumber = String.fromCharCodes(
+        _derivedKeyBytes!,
+      ); // keep legacy string for any UI/debug
+      _networkStreamer?.updateDeviceId(serialNumber);
+
       // Initialize file writer after successful connection
       await _initializeFileWriter();
 
@@ -436,39 +661,36 @@ class EmotivBLEManager {
     }
   }
 
-
   /// Send the start command (0x100) to initiate data streaming
   Future<void> _sendStartCommand(BluetoothCharacteristic characteristic) async {
     try {
       // Create the start command similar to C++ code: newValue.Data[0] = 0x100;
-      Uint8List startCommand = Uint8List.fromList([0x00, 0x01, 0x00, 0x00]); // 0x100 in little-endian
-      
+      Uint8List startCommand = Uint8List.fromList([
+        0x00,
+        0x01,
+        0x00,
+        0x00,
+      ]); // 0x100 in little-endian
+
       await characteristic.write(startCommand, withoutResponse: false);
       print("> Sent start command to characteristic: ${characteristic.uuid}");
-      
     } catch (e) {
       print("> Error sending start command: $e");
     }
   }
 
-
   // 0x0001 -> start EEG (0x41)
   // 0x0002 -> start MEMS (0x42)
   Future<void> _enableBluetoothDataStreams() async {
     // TODO 2025-09-10 - Definitely noticed I was getting data (maybe even both EEG and Motion!) before this function was ever called -- I noticed due to having a breakpoint here.
-    if (_eegDataCharacteristic != null) {  
+    if (_eegDataCharacteristic != null) {
       await _sendStartCommand(_eegDataCharacteristic!);
-      print(
-        'wrote 0x01 to _eegDataCharacteristic)',
-      );
+      print('wrote 0x01 to _eegDataCharacteristic)');
     }
-    
+
     if (_motionDataCharacteristic != null) {
       await _sendStartCommand(_motionDataCharacteristic!);
-      print(
-        'wrote 0x01 to _motionDataCharacteristic)',
-      );
-
+      print('wrote 0x01 to _motionDataCharacteristic)');
     }
 
     // final c = _eegDataCharacteristic;
@@ -547,6 +769,14 @@ class EmotivBLEManager {
 
       // Push to LSL stream
       _pushToLSL(decodedValues);
+      final timestampSeconds =
+          DateTime.now().microsecondsSinceEpoch / 1000000.0;
+      _networkStreamer?.sendSample(
+        streamName: 'eeg',
+        values: decodedValues,
+        timestampSeconds: timestampSeconds,
+        metadata: {'sampleRate': 128.0, 'channelCount': decodedValues.length},
+      );
     }
   }
 
@@ -570,7 +800,7 @@ class EmotivBLEManager {
       // }
       // Send the start command (0x100) similar to C++ code
       // await _sendStartCommand(characteristic);
-      
+
       _updateStatus("Motion characteristic configured");
     } catch (e) {
       _updateStatus("Error setting up Motion characteristic: $e");
@@ -597,9 +827,16 @@ class EmotivBLEManager {
 
       // Push to Motion LSL stream
       _pushMotionToLSL(motionValues);
+      final timestampSeconds =
+          DateTime.now().microsecondsSinceEpoch / 1000000.0;
+      _networkStreamer?.sendSample(
+        streamName: 'motion',
+        values: motionValues,
+        timestampSeconds: timestampSeconds,
+        metadata: {'sampleRate': 16.0, 'channelCount': motionValues.length},
+      );
     }
   }
-
 
   // void _processRawData(Uint8List data) {
   bool enableRawDebugLogging = false; // gate noisy logging
@@ -643,7 +880,7 @@ class EmotivBLEManager {
     _isConnected = false;
     _emotivDevice = null;
     serialNumber = null;
-    
+
     // _controlCharacteristic = null;
     _eegDataCharacteristic = null;
     _motionDataCharacteristic = null;
@@ -655,6 +892,7 @@ class EmotivBLEManager {
 
     // Close LSL outlet
     _closeLSLOutlet();
+    _networkStreamer?.stop();
 
     // // Optionally restart scanning
     // Future.delayed(const Duration(seconds: 2), () {
@@ -677,15 +915,20 @@ class EmotivBLEManager {
       await _rawFileWriter!.dispose();
       _rawFileWriter = null;
     }
-
   }
 
   Future<void> _closeLSLOutlet() async {
     try {
+      // Log final status before closing
+      if (_lslInitialized) {
+        _logLSLStatus();
+      }
+      
       if (_lslWorker != null) {
         // Remove the stream if it was added
         if (_eegStreamInfo != null) await _lslWorker!.removeStream("Epoc X");
-        if (_motionStreamInfo != null) await _lslWorker!.removeStream("Epoc X Motion");
+        if (_motionStreamInfo != null)
+          await _lslWorker!.removeStream("Epoc X Motion");
 
         // Clean up the worker
         _lslWorker = null;
@@ -694,6 +937,13 @@ class EmotivBLEManager {
       _eegStreamInfo = null;
       _motionStreamInfo = null;
       _lslInitialized = false;
+      
+      // Reset counters
+      _lslEegPushCount = 0;
+      _lslEegPushFailures = 0;
+      _lslMotionPushCount = 0;
+      _lslMotionPushFailures = 0;
+      
       _updateStatus("LSL outlet closed");
     } catch (e) {
       _updateStatus("Error closing LSL outlet: $e");
@@ -722,6 +972,9 @@ class EmotivBLEManager {
   void dispose() {
     _closeFileWriter();
     _closeLSLOutlet();
+    _networkStatusSubscription?.cancel();
+    _networkStreamer?.dispose();
+    _networkStatusController.close();
     _eegDataController.close();
     _motionDataController.close();
     _connectionController.close();
