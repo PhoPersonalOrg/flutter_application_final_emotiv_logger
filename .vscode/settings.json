@@ -1,4 +1,4 @@
 {
-    "cmake.ignoreCMakeListsMissing": true,
-    "specstory.cloudSync.enabled": "never"
+  "cmake.ignoreCMakeListsMissing": true,
+  "dart.flutterSdkPath": ".fvm/versions/3.22.3"
 }

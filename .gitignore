@@ -51,3 +51,6 @@ EXTERNAL/BUILT/Runner 2025-08-12 12-20-55
 desktop.ini
 flutter_01.png
 flutter_02.png
+
+# FVM Version Cache
+.fvm/
