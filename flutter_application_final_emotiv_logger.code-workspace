@@ -28,7 +28,7 @@
       "sideBarSectionHeader.border": "#cecece"
     },
     "python.languageServer": "None",
-    "dart.flutterSdkPath": ".fvm/versions/3.22.3"
+    "dart.flutterSdkPath": ".fvm/versions/3.42.0-0.0.pre"
   },
   "extensions": {
     "recommendations": [
