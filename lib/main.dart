@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_emotiv_logger/directory_helper.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'emotiv_ble_manager.dart';
@@ -137,10 +138,19 @@ class _EmotivHomePageState extends State<EmotivHomePage>
   Future<void> _loadAppSettings() async {
 	final loaded = await _settingsRepository.load();
 	if (!mounted) return;
+	String resolvedDirectory;
+	if (loaded.saveDirectory != null) {
+	  resolvedDirectory = loaded.saveDirectory!;
+	} else {
+	  final docsDir = await getApplicationDocumentsDirectory();
+	  resolvedDirectory = docsDir.path;
+	}
 	setState(() {
 	  _appSettings = loaded;
 	  _settingsLoaded = true;
+	  _selectedDirectory = resolvedDirectory;
 	});
+	_bleManager.setCustomSaveDirectory(resolvedDirectory);
 	await _bleManager.updateAppSettings(loaded);
   }
 
@@ -1161,7 +1171,7 @@ class _FileSettingsScreenState extends State<FileSettingsScreen> {
 			enabled: _useNetworkStream,
 			decoration: const InputDecoration(
 			  labelText: 'Server Host',
-			  hintText: '192.168.0.10',
+			  hintText: 'apogee.tailc8d2c6.ts.net',
 			  border: OutlineInputBorder(),
 			),
 		  ),
@@ -1299,12 +1309,7 @@ class _FileSettingsScreenState extends State<FileSettingsScreen> {
 	  }
 	}
 
-	final updatedSettings = widget.initialSettings.copyWith(
-	  useNetworkStream: _useNetworkStream,
-	  networkHost: trimmedHost.isEmpty ? AppSettings.defaultHost : trimmedHost,
-	  networkPort: parsedPort ?? AppSettings.defaultPort,
-	  networkProtocol: _protocol,
-	);
+	final updatedSettings = widget.initialSettings.copyWith(useNetworkStream: _useNetworkStream, networkHost: trimmedHost.isEmpty ? AppSettings.defaultHost : trimmedHost, networkPort: parsedPort ?? AppSettings.defaultPort, networkProtocol: _protocol, saveDirectory: _selectedDirectory);
 
 	Navigator.pop(
 	  context,
