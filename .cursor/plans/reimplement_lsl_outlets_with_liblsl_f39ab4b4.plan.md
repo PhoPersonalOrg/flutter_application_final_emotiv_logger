@@ -11,11 +11,12 @@ todos:
   - id: verify-build
     content: Verify the project builds successfully after the migration
     status: pending
+isProject: false
 ---
 
 # Reimplement LSL Outlets with `liblsl`
 
-Replace the `lsl_flutter` `OutletWorker`-based LSL implementation in [`lib/emotiv_ble_manager.dart`](lib/emotiv_ble_manager.dart) with direct `liblsl` `LSLOutlet` objects. The `liblsl: ^0.9.1` package is already in `pubspec.yaml` and locked. The `lsl_flutter: ^0.0.6` dependency will be removed.
+Replace the `lsl_flutter` `OutletWorker`-based LSL implementation in `[lib/emotiv_ble_manager.dart](lib/emotiv_ble_manager.dart)` with direct `liblsl` `LSLOutlet` objects. The `liblsl: ^0.9.1` package is already in `pubspec.yaml` and locked. The `lsl_flutter: ^0.0.6` dependency will be removed.
 
 ## Current vs New API
 
@@ -35,10 +36,11 @@ Replace the `lsl_flutter` `OutletWorker`-based LSL implementation in [`lib/emoti
 
 ## Changes
 
-### [`lib/emotiv_ble_manager.dart`](lib/emotiv_ble_manager.dart)
+### `[lib/emotiv_ble_manager.dart](lib/emotiv_ble_manager.dart)`
 
 1. **Import**: swap `lsl_flutter` → `liblsl`
 2. **Fields**: replace single `OutletWorker? _lslWorker` + `StreamInfo?` pair with two direct outlets:
+
 ```dart
 LSLOutlet? _eegOutlet;
 LSLOutlet? _motionOutlet;
@@ -46,7 +48,8 @@ LSLStreamInfo? _eegStreamInfo;
 LSLStreamInfo? _motionStreamInfo;
 ```
 
-3. **`_initializeLSLOutlet()`**: replace `OutletWorker.spawn()` + `addStream()` pattern with:
+1. `**_initializeLSLOutlet()**`: replace `OutletWorker.spawn()` + `addStream()` pattern with:
+
 ```dart
 _eegStreamInfo = await LSL.createStreamInfo(streamName: 'Epoc X', streamType: LSLContentType.eeg, channelCount: 14, sampleRate: 128.0, channelFormat: LSLChannelFormat.float32, sourceId: deviceId);
 _eegOutlet = await LSL.createOutlet(streamInfo: _eegStreamInfo!, chunkSize: 0, maxBuffer: 360);
@@ -54,15 +57,16 @@ _motionStreamInfo = await LSL.createStreamInfo(streamName: 'Epoc X Motion', stre
 _motionOutlet = await LSL.createOutlet(streamInfo: _motionStreamInfo!, chunkSize: 0, maxBuffer: 360);
 ```
 
-4. **`_pushToLSL()`**: `await _eegOutlet!.pushSample(sample)` (returns `int` error code, 0 = success)
-5. **`_pushMotionToLSL()`**: `await _motionOutlet!.pushSample(sample)` 
-6. **`_closeLSLOutlet()`**: replace `removeStream` calls with `await _eegOutlet?.destroy()` + `await _eegStreamInfo?.destroy()` (and same for motion)
-7. **`getLSLStatus()` / `isLSLHealthy()`**: replace `workerActive: _lslWorker != null` with `eegOutletActive: _eegOutlet != null`
+1. `**_pushToLSL()**`: `await _eegOutlet!.pushSample(sample)` (returns `int` error code, 0 = success)
+2. `**_pushMotionToLSL()**`: `await _motionOutlet!.pushSample(sample)`
+3. `**_closeLSLOutlet()**`: replace `removeStream` calls with `await _eegOutlet?.destroy()` + `await _eegStreamInfo?.destroy()` (and same for motion)
+4. `**getLSLStatus()` / `isLSLHealthy()**`: replace `workerActive: _lslWorker != null` with `eegOutletActive: _eegOutlet != null`
 
-### [`pubspec.yaml`](pubspec.yaml)
+### `[pubspec.yaml](pubspec.yaml)`
 
 - Remove `lsl_flutter: ^0.0.6`
 
-### [`lib/testing/liblsl_example.dart`](lib/testing/liblsl_example.dart)
+### `[lib/testing/liblsl_example.dart](lib/testing/liblsl_example.dart)`
 
 - No changes needed (already uses `liblsl` API correctly)
+

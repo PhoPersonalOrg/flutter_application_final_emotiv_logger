@@ -51,7 +51,6 @@ class _EmotivHomePageState extends State<EmotivHomePage>
   late StreamSubscription _connectionSubscription;
   late StreamSubscription _networkStatusSubscription;
 
-  final bool _useLSLStreams = false;
   AppSettings _appSettings = const AppSettings();
   NetworkStreamStatus _networkStatus = NetworkStreamStatus.disabled();
   bool _settingsLoaded = false;

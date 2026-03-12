@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_emotiv_logger/generic_file_writer.dart';
 import 'package:lsl_flutter/lsl_flutter.dart';
+import 'package:carp_multicast_lock/carp_multicast_lock.dart';
 import 'crypto_utils.dart';
 import 'eeg_file_writer.dart';
 import 'motion_file_writer.dart';
@@ -75,7 +76,9 @@ class EmotivBLEManager {
   OutletManager<double>? _eegOutletManager;
   OutletManager<double>? _motionOutletManager;
   bool _lslInitialized = false;
-  
+  /// Android only: multicast lock held so LSL outlet discovery works on LAN; release in _closeLSLOutlet.
+  MulticastLock? _androidMulticastLock;
+
   // LSL monitoring counters
   int _lslEegPushCount = 0;
   int _lslEegPushFailures = 0;
@@ -171,8 +174,22 @@ class EmotivBLEManager {
       final platform = Platform.isIOS ? "iOS" : (Platform.isAndroid ? "Android" : "Unknown");
       _updateStatus("Initializing LSL outlet on $platform...");
 
+      if (Platform.isAndroid) {
+        try {
+          _androidMulticastLock = MulticastLock();
+          await _androidMulticastLock!.acquireMulticastLock();
+          print("LSL: Android multicast lock acquired for LAN discovery");
+        } catch (e) {
+          print("LSL: Failed to acquire Android multicast lock: $e");
+          _updateStatus("LSL: Multicast lock failed - streams may not be visible on LAN");
+        }
+      }
+
       final deviceId = _emotivDevice?.remoteId.toString() ?? "emotiv_unknown";
       print("LSL: Creating EEG outlet for device: $deviceId");
+
+      // When migrating to liblsl and adding hostname fix: set outlet hostname to device WiFi IP
+      // (e.g. network_info_plus getWifiIP()) on both iOS and Android before creating the outlet.
 
       // Create EEG outlet (14 channels @ 128 Hz)
       try {
@@ -835,6 +852,16 @@ class EmotivBLEManager {
       _lslEegPushFailures = 0;
       _lslMotionPushCount = 0;
       _lslMotionPushFailures = 0;
+
+      if (Platform.isAndroid && _androidMulticastLock != null) {
+        try {
+          await _androidMulticastLock!.releaseMulticastLock();
+          print("LSL: Android multicast lock released");
+        } catch (e) {
+          print("LSL: Error releasing Android multicast lock: $e");
+        }
+        _androidMulticastLock = null;
+      }
 
       _updateStatus("LSL outlet closed");
     } catch (e) {
