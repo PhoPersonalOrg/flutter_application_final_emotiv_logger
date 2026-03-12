@@ -287,7 +287,7 @@ class EmotivBLEManager {
   void _logLSLStatus() {
     if (_lslInitialized) {
       final status = getLSLStatus();
-      print("LSL Status: ${status}");
+      print("LSL Status: $status");
       final eegSuccessRate = _lslEegPushCount > 0 
           ? (_lslEegPushCount / (_lslEegPushCount + _lslEegPushFailures) * 100).toStringAsFixed(1)
           : "N/A";
@@ -442,7 +442,7 @@ class EmotivBLEManager {
       await connectToDevice(device);
     } catch (e) {
       _updateStatus("Failed to connect to $deviceName: $e");
-      throw e; // Re-throw so the UI can handle it
+      rethrow; // Re-throw so the UI can handle it
     }
   }
 
@@ -773,7 +773,7 @@ class EmotivBLEManager {
     if (data.length < readSize) {
       // Looks like it might be 20 for motion, 32 for EEG?
       print(
-        "EmotivBLEManager: Data size too small: ${data.length}, expected size: ${readSize}\nread data: ${data}",
+        "EmotivBLEManager: Data size too small: ${data.length}, expected size: $readSize\nread data: $data",
       );
       return false;
     }
