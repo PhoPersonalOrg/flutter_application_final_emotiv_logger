@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:path_provider/path_provider.dart';
 
 class GenericFileWriter {
@@ -9,7 +8,7 @@ class GenericFileWriter {
   Timer? _flushTimer;
   final List<String> _writeBuffer = [];
 
-  String _headerLine = 'timestamp,*raw*';
+  final String _headerLine = 'timestamp,*raw*';
   static const int _bufferSize = 100; // Buffer before writing
   static const int _flushIntervalMs = 3000; // Flush every second
 

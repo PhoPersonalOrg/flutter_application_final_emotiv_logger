@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:flutter_emotiv_logger/generic_file_writer.dart';
 import 'package:lsl_flutter/lsl_flutter.dart';
+import 'package:carp_multicast_lock/carp_multicast_lock.dart';
 import 'crypto_utils.dart';
 import 'eeg_file_writer.dart';
 import 'motion_file_writer.dart';
@@ -72,11 +73,12 @@ class EmotivBLEManager {
   GenericFileWriter? _rawFileWriter;
 
   // LSL outlet components
-  OutletWorker? _lslWorker;
-  StreamInfo? _eegStreamInfo;
-  StreamInfo? _motionStreamInfo;
+  OutletManager<double>? _eegOutletManager;
+  OutletManager<double>? _motionOutletManager;
   bool _lslInitialized = false;
-  
+  /// Android only: multicast lock held so LSL outlet discovery works on LAN; release in _closeLSLOutlet.
+  MulticastLock? _androidMulticastLock;
+
   // LSL monitoring counters
   int _lslEegPushCount = 0;
   int _lslEegPushFailures = 0;
@@ -172,145 +174,72 @@ class EmotivBLEManager {
       final platform = Platform.isIOS ? "iOS" : (Platform.isAndroid ? "Android" : "Unknown");
       _updateStatus("Initializing LSL outlet on $platform...");
 
-      // Create EEG stream info - determine channels from Emotiv data
-      // Based on the crypto_utils processing, each 16-byte chunk produces 8 values
-      final deviceId = _emotivDevice?.remoteId.toString() ?? "emotiv_unknown";
-      print("LSL: Creating EEG stream info for device: $deviceId");
-
-      try {
-        _eegStreamInfo = StreamInfoFactory.createDoubleStreamInfo(
-          "Epoc X",
-          "EEG",
-          Float32ChannelFormat(),
-          channelCount: 14, // 14 EEG channels from decrypted data
-          nominalSRate: 128.0, // Emotiv typically runs at 128 Hz
-          sourceId: deviceId,
-        );
-        print("LSL: EEG stream info created successfully (14 channels, 128 Hz)");
-      } catch (e) {
-        _updateStatus("LSL: Failed to create EEG stream info: $e");
-        print("LSL: Error creating EEG stream info: $e");
-        return false;
-      }
-
-      // Spawn LSL worker with timeout
-      try {
-        print("LSL: Spawning OutletWorker...");
-        _lslWorker = await OutletWorker.spawn().timeout(
-          const Duration(seconds: 10),
-          onTimeout: () {
-            throw TimeoutException("LSL worker spawn timed out after 10 seconds");
-          },
-        );
-        print("LSL: OutletWorker spawned successfully");
-      } catch (e) {
-        _updateStatus("LSL: Failed to spawn worker: $e");
-        print("LSL: Error spawning OutletWorker: $e");
-        print("LSL: Platform: $platform");
-        _eegStreamInfo = null;
-        return false;
-      }
-
-      // Add the EEG stream
-      bool eegAdded = false;
-      try {
-        print("LSL: Adding EEG stream to worker...");
-        eegAdded = await _lslWorker!.addStream(_eegStreamInfo!).timeout(
-          const Duration(seconds: 5),
-          onTimeout: () {
-            throw TimeoutException("Adding EEG stream timed out after 5 seconds");
-          },
-        );
-        if (!eegAdded) {
-          _updateStatus("LSL: Failed to add EEG stream");
-          print("LSL: addStream returned false for EEG stream");
-          return false;
-        }
-        print("LSL: EEG stream added successfully");
-      } catch (e) {
-        _updateStatus("LSL: Error adding EEG stream: $e");
-        print("LSL: Error adding EEG stream: $e");
-        return false;
-      }
-
-      // Motion stream info (6 channels @ ~16 Hz)
-      try {
-        print("LSL: Creating motion stream info...");
-        _motionStreamInfo = StreamInfoFactory.createDoubleStreamInfo(
-          "Epoc X Motion",
-          "Accelerometer",
-          Float32ChannelFormat(),
-          channelCount: 6,
-          nominalSRate: 16.0,
-          sourceId: deviceId,
-        );
-        print("LSL: Motion stream info created successfully (6 channels, 16 Hz)");
-      } catch (e) {
-        _updateStatus("LSL: Failed to create motion stream info: $e");
-        print("LSL: Error creating motion stream info: $e");
-        // Continue without motion stream - EEG is more important
-        _motionStreamInfo = null;
-      }
-
-      // Add motion stream if created
-      bool motionAdded = false;
-      if (_motionStreamInfo != null) {
+      if (Platform.isAndroid) {
         try {
-          print("LSL: Adding motion stream to worker...");
-          motionAdded = await _lslWorker!.addStream(_motionStreamInfo!).timeout(
-            const Duration(seconds: 5),
-            onTimeout: () {
-              throw TimeoutException("Adding motion stream timed out after 5 seconds");
-            },
-          );
-          if (motionAdded) {
-            print("LSL: Motion stream added successfully");
-          } else {
-            print("LSL: Warning: addStream returned false for motion stream");
-          }
+          _androidMulticastLock = MulticastLock();
+          await _androidMulticastLock!.acquireMulticastLock();
+          print("LSL: Android multicast lock acquired for LAN discovery");
         } catch (e) {
-          _updateStatus("LSL: Error adding motion stream: $e");
-          print("LSL: Error adding motion stream: $e");
-          // Continue - motion stream is optional
+          print("LSL: Failed to acquire Android multicast lock: $e");
+          _updateStatus("LSL: Multicast lock failed - streams may not be visible on LAN");
         }
       }
 
-      if (eegAdded) {
-        _lslInitialized = true;
-        // Reset push counters
-        _lslEegPushCount = 0;
-        _lslEegPushFailures = 0;
-        _lslMotionPushCount = 0;
-        _lslMotionPushFailures = 0;
-        final streamsStatus = motionAdded ? "EEG and Motion" : "EEG (Motion failed)";
-        _updateStatus("LSL outlet initialized successfully on $platform - $streamsStatus streams active");
-        print("LSL: Initialization complete - $streamsStatus streams ready");
-        _logLSLStatus();
-        return true;
-      } else {
-        _updateStatus("LSL: Failed to initialize - EEG stream not added");
-        print("LSL: Initialization failed - EEG stream was not added");
+      final deviceId = _emotivDevice?.remoteId.toString() ?? "emotiv_unknown";
+      print("LSL: Creating EEG outlet for device: $deviceId");
+
+      // When migrating to liblsl and adding hostname fix: set outlet hostname to device WiFi IP
+      // (e.g. network_info_plus getWifiIP()) on both iOS and Android before creating the outlet.
+
+      // Create EEG outlet (14 channels @ 128 Hz)
+      try {
+        final eegInfo = StreamInfoFactory.createDoubleStreamInfo("Epoc X", "EEG", Float32ChannelFormat(), channelCount: 14, nominalSRate: 128.0, sourceId: deviceId);
+        _eegOutletManager = OutletManager<double>(eegInfo);
+        print("LSL: EEG outlet created successfully (14 channels, 128 Hz)");
+      } catch (e) {
+        _updateStatus("LSL: Failed to create EEG outlet: $e");
+        print("LSL: Error creating EEG outlet: $e");
         return false;
       }
+
+      // Create Motion outlet (6 channels @ 16 Hz) — optional
+      bool motionCreated = false;
+      try {
+        final motionInfo = StreamInfoFactory.createDoubleStreamInfo("Epoc X Motion", "Accelerometer", Float32ChannelFormat(), channelCount: 6, nominalSRate: 16.0, sourceId: deviceId);
+        _motionOutletManager = OutletManager<double>(motionInfo);
+        motionCreated = true;
+        print("LSL: Motion outlet created successfully (6 channels, 16 Hz)");
+      } catch (e) {
+        _updateStatus("LSL: Failed to create motion outlet: $e");
+        print("LSL: Error creating motion outlet: $e");
+        // Continue without motion — EEG is more important
+      }
+
+      _lslInitialized = true;
+      _lslEegPushCount = 0;
+      _lslEegPushFailures = 0;
+      _lslMotionPushCount = 0;
+      _lslMotionPushFailures = 0;
+      final streamsStatus = motionCreated ? "EEG and Motion" : "EEG (Motion failed)";
+      _updateStatus("LSL outlet initialized successfully on $platform - $streamsStatus streams active");
+      print("LSL: Initialization complete - $streamsStatus streams ready");
+      _logLSLStatus();
+      return true;
     } catch (e, stackTrace) {
       _updateStatus("LSL: Critical error initializing outlet: $e");
       print("LSL: Critical error: $e");
       print("LSL: Stack trace: $stackTrace");
       _lslInitialized = false;
-      _lslWorker = null;
-      _eegStreamInfo = null;
-      _motionStreamInfo = null;
+      _eegOutletManager = null;
+      _motionOutletManager = null;
       return false;
     }
   }
 
   // Push sample data to LSL stream safely
-  Future<bool> _pushToLSL(List<double> sample) async {
-    if (!_lslInitialized || _lslWorker == null || _eegStreamInfo == null) {
-      return false;
-    }
+  bool _pushToLSL(List<double> sample) {
+    if (!_lslInitialized || _eegOutletManager == null) return false;
 
-    // Validate sample length matches expected channel count
     const expectedChannels = 14;
     if (sample.length != expectedChannels) {
       print("LSL: EEG sample length mismatch - expected $expectedChannels, got ${sample.length}");
@@ -318,26 +247,21 @@ class EmotivBLEManager {
     }
 
     try {
-      await _lslWorker!.pushSample("Epoc X", sample);
+      _eegOutletManager!.pushSample(sample);
       _lslEegPushCount++;
       return true;
     } catch (e) {
       _lslEegPushFailures++;
       print("LSL: EEG push error: $e");
-      print("LSL: Sample length: ${sample.length}, channels: ${sample.take(3).join(', ')}...");
       print("LSL: EEG push stats - Success: $_lslEegPushCount, Failures: $_lslEegPushFailures");
-      // Don't mark as failed on single push error - LSL may recover
       return false;
     }
   }
 
   // Push motion samples to LSL
-  Future<bool> _pushMotionToLSL(List<double> sample) async {
-    if (!_lslInitialized || _lslWorker == null || _motionStreamInfo == null) {
-      return false;
-    }
+  bool _pushMotionToLSL(List<double> sample) {
+    if (!_lslInitialized || _motionOutletManager == null) return false;
 
-    // Validate sample length matches expected channel count
     const expectedChannels = 6;
     if (sample.length != expectedChannels) {
       print("LSL: Motion sample length mismatch - expected $expectedChannels, got ${sample.length}");
@@ -345,15 +269,13 @@ class EmotivBLEManager {
     }
 
     try {
-      await _lslWorker!.pushSample("Epoc X Motion", sample);
+      _motionOutletManager!.pushSample(sample);
       _lslMotionPushCount++;
       return true;
     } catch (e) {
       _lslMotionPushFailures++;
       print("LSL: Motion push error: $e");
-      print("LSL: Sample length: ${sample.length}, channels: ${sample.take(3).join(', ')}...");
       print("LSL: Motion push stats - Success: $_lslMotionPushCount, Failures: $_lslMotionPushFailures");
-      // Don't mark as failed on single push error - LSL may recover
       return false;
     }
   }
@@ -362,28 +284,27 @@ class EmotivBLEManager {
   Map<String, dynamic> getLSLStatus() {
     return {
       'initialized': _lslInitialized,
-      'workerActive': _lslWorker != null,
-      'eegStreamReady': _eegStreamInfo != null,
-      'motionStreamReady': _motionStreamInfo != null,
+      'eegOutletActive': _eegOutletManager != null,
+      'motionOutletActive': _motionOutletManager != null,
       'eegPushCount': _lslEegPushCount,
       'eegPushFailures': _lslEegPushFailures,
       'motionPushCount': _lslMotionPushCount,
       'motionPushFailures': _lslMotionPushFailures,
-      'eegStreamName': _eegStreamInfo != null ? "Epoc X" : null,
-      'motionStreamName': _motionStreamInfo != null ? "Epoc X Motion" : null,
+      'eegStreamName': _eegOutletManager != null ? "Epoc X" : null,
+      'motionStreamName': _motionOutletManager != null ? "Epoc X Motion" : null,
     };
   }
 
-  // Check if LSL outlet is healthy (initialized and worker active)
+  // Check if LSL outlet is healthy (initialized and outlet active)
   bool isLSLHealthy() {
-    return _lslInitialized && _lslWorker != null && _eegStreamInfo != null;
+    return _lslInitialized && _eegOutletManager != null;
   }
 
   // Log LSL status for debugging
   void _logLSLStatus() {
     if (_lslInitialized) {
       final status = getLSLStatus();
-      print("LSL Status: ${status}");
+      print("LSL Status: $status");
       final eegSuccessRate = _lslEegPushCount > 0 
           ? (_lslEegPushCount / (_lslEegPushCount + _lslEegPushFailures) * 100).toStringAsFixed(1)
           : "N/A";
@@ -538,7 +459,7 @@ class EmotivBLEManager {
       await connectToDevice(device);
     } catch (e) {
       _updateStatus("Failed to connect to $deviceName: $e");
-      throw e; // Re-throw so the UI can handle it
+      rethrow; // Re-throw so the UI can handle it
     }
   }
 
@@ -869,7 +790,7 @@ class EmotivBLEManager {
     if (data.length < readSize) {
       // Looks like it might be 20 for motion, 32 for EEG?
       print(
-        "EmotivBLEManager: Data size too small: ${data.length}, expected size: ${readSize}\nread data: ${data}",
+        "EmotivBLEManager: Data size too small: ${data.length}, expected size: $readSize\nread data: $data",
       );
       return false;
     }
@@ -919,31 +840,29 @@ class EmotivBLEManager {
 
   Future<void> _closeLSLOutlet() async {
     try {
-      // Log final status before closing
-      if (_lslInitialized) {
-        _logLSLStatus();
-      }
-      
-      if (_lslWorker != null) {
-        // Remove the stream if it was added
-        if (_eegStreamInfo != null) await _lslWorker!.removeStream("Epoc X");
-        if (_motionStreamInfo != null)
-          await _lslWorker!.removeStream("Epoc X Motion");
+      if (_lslInitialized) _logLSLStatus();
 
-        // Clean up the worker
-        _lslWorker = null;
-      }
-
-      _eegStreamInfo = null;
-      _motionStreamInfo = null;
+      _eegOutletManager?.destroy();
+      _motionOutletManager?.destroy();
+      _eegOutletManager = null;
+      _motionOutletManager = null;
       _lslInitialized = false;
-      
-      // Reset counters
+
       _lslEegPushCount = 0;
       _lslEegPushFailures = 0;
       _lslMotionPushCount = 0;
       _lslMotionPushFailures = 0;
-      
+
+      if (Platform.isAndroid && _androidMulticastLock != null) {
+        try {
+          await _androidMulticastLock!.releaseMulticastLock();
+          print("LSL: Android multicast lock released");
+        } catch (e) {
+          print("LSL: Error releasing Android multicast lock: $e");
+        }
+        _androidMulticastLock = null;
+      }
+
       _updateStatus("LSL outlet closed");
     } catch (e) {
       _updateStatus("Error closing LSL outlet: $e");

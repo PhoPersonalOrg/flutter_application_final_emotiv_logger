@@ -54,3 +54,6 @@ flutter_02.png
 
 # FVM Version Cache
 .fvm/
+.specstory
+.cursorindexingignore
+.cursorindexingignore.bak

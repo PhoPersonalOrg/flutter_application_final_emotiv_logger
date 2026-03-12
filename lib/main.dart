@@ -24,7 +24,7 @@ class EmotivBLEApp extends StatelessWidget {
 	return MaterialApp(
 	  title: 'Emotiv BLE LSL Logger',
 	  theme: ThemeData(primarySwatch: Colors.purple, useMaterial3: true),
-	  home: EmotivHomePage(storage: FileStorage.new()),
+	  home: EmotivHomePage(storage: FileStorage()),
 	);
   }
 }
@@ -51,7 +51,6 @@ class _EmotivHomePageState extends State<EmotivHomePage>
   late StreamSubscription _connectionSubscription;
   late StreamSubscription _networkStatusSubscription;
 
-  bool _useLSLStreams = false;
   AppSettings _appSettings = const AppSettings();
   NetworkStreamStatus _networkStatus = NetworkStreamStatus.disabled();
   bool _settingsLoaded = false;
@@ -64,7 +63,7 @@ class _EmotivHomePageState extends State<EmotivHomePage>
   String _connectedDeviceName = '';
 
   // EEG data history for table display
-  List<Map<String, dynamic>> _eegRecords = [];
+  final List<Map<String, dynamic>> _eegRecords = [];
   // Throttle redraws
   DateTime _lastUiUpdate = DateTime.fromMillisecondsSinceEpoch(0);
   static const Duration _uiUpdateInterval = Duration(milliseconds: 200); // 5 Hz
@@ -1187,7 +1186,7 @@ class _FileSettingsScreenState extends State<FileSettingsScreen> {
 		  ),
 		  const SizedBox(height: 8),
 		  DropdownButtonFormField<NetworkProtocol>(
-			value: _protocol,
+			initialValue: _protocol,
 			decoration: const InputDecoration(
 			  labelText: 'Protocol',
 			  border: OutlineInputBorder(),
