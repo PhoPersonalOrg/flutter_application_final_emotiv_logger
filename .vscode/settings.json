@@ -1,4 +1,4 @@
 {
   "cmake.ignoreCMakeListsMissing": true,
-  "dart.flutterSdkPath": ".fvm/versions/3.22.3"
+  "dart.flutterSdkPath": ".fvm/versions/3.42.0-0.0.pre"
 }

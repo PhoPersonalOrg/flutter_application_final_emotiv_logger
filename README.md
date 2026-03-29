@@ -65,9 +65,9 @@ You need to i nstall the flutter version manager `fvm`
 ```bash
 brew tap leoafarias/fvm
 brew install fvm
-fvm install fvm install 3.42.0-0.0.pre
+fvm install 3.42.0-0.0.pre
 # Use a version in your project
-fvm use fvm install 3.42.0-0.0.pre
+fvm use 3.42.0-0.0.pre
 
 ```
 
