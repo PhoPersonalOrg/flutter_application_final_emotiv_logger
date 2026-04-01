@@ -354,6 +354,7 @@ class _EmotivHomePageState extends State<EmotivHomePage>
 		  // Add settings button to app bar
 		  IconButton(
 			icon: const Icon(Icons.settings),
+			tooltip: 'Settings',
 			onPressed: _settingsLoaded ? () => _openFileSettings() : null,
 		  ),
 		],
@@ -977,6 +978,14 @@ class ScannerWidget extends StatelessWidget {
 		Row(
 		  children: [
 			const Text('Scanning:'),
+			if (isScanning) ...[
+			  const SizedBox(width: 8),
+			  const SizedBox(
+				width: 16,
+				height: 16,
+				child: CircularProgressIndicator(strokeWidth: 2),
+			  ),
+			],
 			const Spacer(),
 			ElevatedButton(
 			  onPressed: onToggleScan,
@@ -991,6 +1000,20 @@ class ScannerWidget extends StatelessWidget {
 		const Text('Found headsets:'),
 
 		const SizedBox(height: 8),
+
+		if (foundDevices.isEmpty)
+		  Padding(
+			padding: const EdgeInsets.symmetric(vertical: 8.0),
+			child: Text(
+			  isScanning
+				  ? 'Searching for devices...'
+				  : 'No devices found yet. Tap Start to scan.',
+			  style: const TextStyle(
+				color: Colors.grey,
+				fontStyle: FontStyle.italic,
+			  ),
+			),
+		  ),
 
 		// Device list with connect buttons
 		...foundDevices.map(
