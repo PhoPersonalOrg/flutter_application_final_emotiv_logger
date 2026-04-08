@@ -1,0 +1,3 @@
+## 2024-05-18 - [Add Tooltip to Icon-Only Buttons]
+**Learning:** In Flutter applications, using the `tooltip` property on an `IconButton` natively serves dual purposes: providing visual hover context and supplying the semantic label for screen readers. It is an equivalent to an ARIA label in web development and crucial for accessibility when an icon doesn't contain explanatory text.
+**Action:** When creating or identifying an icon-only button without textual explanation, always add a `tooltip` attribute to improve both usability and accessibility.
