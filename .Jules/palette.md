@@ -1,0 +1,3 @@
+## 2024-05-17 - Add Tooltip for IconButton Accessibility
+**Learning:** In Flutter, the `IconButton` widget does not provide any semantic information or visual hover feedback by default if only an `icon` is provided. Adding a `tooltip` property is a critical accessibility best practice, as it natively provides both visual hover context for pointer devices and a semantic label for screen readers, killing two UX birds with one stone.
+**Action:** Always add a `tooltip` property to `IconButton` widgets when they lack text labels.
