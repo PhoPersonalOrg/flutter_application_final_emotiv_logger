@@ -354,6 +354,7 @@ class _EmotivHomePageState extends State<EmotivHomePage>
 		  // Add settings button to app bar
 		  IconButton(
 			icon: const Icon(Icons.settings),
+			tooltip: 'Settings',
 			onPressed: _settingsLoaded ? () => _openFileSettings() : null,
 		  ),
 		],
