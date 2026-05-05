@@ -65,7 +65,7 @@ class DirectoryHelper {
   /// Let user select a directory
   static Future<String?> selectDirectory() async {
 	try {
-	  final String? selectedDirectory = await FilePicker.platform.getDirectoryPath();
+	  final String? selectedDirectory = await FilePicker.getDirectoryPath();
 	  return selectedDirectory;
 	} catch (e) {
 	  print("Error selecting directory: $e");

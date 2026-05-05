@@ -46,8 +46,8 @@ class NetworkStreamer {
     required this.host,
     required this.port,
     required this.protocol,
-    String? deviceId,
-  }) : deviceId = deviceId;
+    this.deviceId,
+  });
 
   final String host;
   final int port;
@@ -145,10 +145,10 @@ class NetworkStreamer {
       'timestamp': timestampSeconds,
       'deviceId': deviceId,
       'values': values,
-      if (metadata != null) 'meta': metadata,
+      'meta': ?metadata,
     };
 
-    final data = utf8.encode(jsonEncode(payload) + '\n');
+    final data = utf8.encode('${jsonEncode(payload)}\n');
 
     try {
       if (protocol == NetworkProtocol.udp) {

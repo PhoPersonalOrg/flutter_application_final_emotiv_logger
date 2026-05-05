@@ -538,7 +538,7 @@ class EmotivBLEManager {
       await connectToDevice(device);
     } catch (e) {
       _updateStatus("Failed to connect to $deviceName: $e");
-      throw e; // Re-throw so the UI can handle it
+      rethrow; // Re-throw so the UI can handle it
     }
   }
 
@@ -927,8 +927,9 @@ class EmotivBLEManager {
       if (_lslWorker != null) {
         // Remove the stream if it was added
         if (_eegStreamInfo != null) await _lslWorker!.removeStream("Epoc X");
-        if (_motionStreamInfo != null)
+        if (_motionStreamInfo != null) {
           await _lslWorker!.removeStream("Epoc X Motion");
+        }
 
         // Clean up the worker
         _lslWorker = null;
