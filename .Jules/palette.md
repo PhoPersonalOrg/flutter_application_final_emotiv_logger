@@ -1,0 +1,1 @@
+## 2024-05-20 - Adding Tooltips to Icon-Only Buttons\n**Learning:** Tooltips are essential for icon-only buttons to convey meaning to users, especially for accessibility.\n**Action:** Add tooltips to icon-only buttons like the settings gear icon.
