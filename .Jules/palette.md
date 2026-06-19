@@ -1,0 +1,3 @@
+## 2024-05-24 - Tooltips for Accessibility and UX
+**Learning:** In Flutter, the `tooltip` property on widgets like `IconButton` serves a dual purpose. It provides a visual text label when the user hovers or long-presses, improving discoverability. Crucially, it also automatically sets the semantic label for screen readers, meaning you get both visual UX improvements and a11y compliance in a single property.
+**Action:** Always prefer setting `tooltip` on icon-only interactive elements in Flutter over manually wrapping them with `Semantics` widgets, unless custom semantic behavior is required. This ensures a consistent experience for both sighted users and those relying on assistive technology.
