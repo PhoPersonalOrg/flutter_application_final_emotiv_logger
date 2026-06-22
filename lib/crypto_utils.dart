@@ -2,6 +2,8 @@ import 'dart:typed_data';
 import 'package:encrypt/encrypt.dart';
 
 class CryptoUtils {
+  static final Map<String, Encrypter> _encrypterCache = {};
+
   static const int hidDataLen = 16;
   static const double multiplier = 0.5128205128205129;
 
@@ -37,9 +39,13 @@ class CryptoUtils {
     try {
       // Device-specific 16-byte AES key (same as your Objective-C code)
       // final keyString = '6566565666756557';
-      final key = Key.fromUtf8(keyString.padRight(16, '0').substring(0, 16));
-
-      final encrypter = Encrypter(AES(key, mode: AESMode.ecb, padding: null));
+      final paddedKeyString = keyString.padRight(16, '0').substring(0, 16);
+      final encrypter = _encrypterCache.putIfAbsent(
+        paddedKeyString,
+        () => Encrypter(
+          AES(Key.fromUtf8(paddedKeyString), mode: AESMode.ecb, padding: null),
+        ),
+      );
 
       final List<double> results = [];
 
@@ -87,13 +93,20 @@ class CryptoUtils {
   static List<double> decryptToDoubleListWithKeyBytes(Uint8List keyBytes, Uint8List data) {
     try {
       assert(keyBytes.length == 16, 'AES key must be 16 bytes');
-      final key = Key(keyBytes);
-      final encrypter = Encrypter(AES(key, mode: AESMode.ecb, padding: null));
 
-      final xored = Uint8List.fromList(List<int>.generate(data.length, (i) => data[i] ^ 0x55));
+      final keyHex = keyBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+      final encrypter = _encrypterCache.putIfAbsent(
+        keyHex,
+        () => Encrypter(AES(Key(keyBytes), mode: AESMode.ecb, padding: null)),
+      );
+
+      final xored = Uint8List(data.length);
+      for (int i = 0; i < data.length; i++) {
+        xored[i] = data[i] ^ 0x55;
+      }
       final decryptedAll = BytesBuilder();
       for (int c = 0; c + 16 <= xored.length; c += 16) {
-        final block = Uint8List.fromList(xored.sublist(c, c + 16));
+        final block = Uint8List.view(xored.buffer, xored.offsetInBytes + c, 16);
         decryptedAll.add(encrypter.decryptBytes(Encrypted(block)));
       }
       final dec = decryptedAll.toBytes();
@@ -131,16 +144,22 @@ class CryptoUtils {
   static List<double> decryptToDoubleList(String keyString, Uint8List data) {
     try {
       // final keyString ='6566565666756557'; // This is the Emotiv Epoc X's serial number, and it's hard coded. wtf is this 2025-07-31
-      final key = Key.fromUtf8(keyString.padRight(16, '0').substring(0, 16));
-      final encrypter = Encrypter(AES(key, mode: AESMode.ecb, padding: null));
+      final paddedKeyString = keyString.padRight(16, '0').substring(0, 16);
+      final encrypter = _encrypterCache.putIfAbsent(
+        paddedKeyString,
+        () => Encrypter(
+          AES(Key.fromUtf8(paddedKeyString), mode: AESMode.ecb, padding: null),
+        ),
+      );
 
       // 2) XOR each byte with 0x55 (BLE EEG path) then decrypt in 16-byte blocks
-      final xored = Uint8List.fromList(
-        List<int>.generate(data.length, (i) => data[i] ^ 0x55),
-      );
+      final xored = Uint8List(data.length);
+      for (int i = 0; i < data.length; i++) {
+        xored[i] = data[i] ^ 0x55;
+      }
       final decryptedAll = BytesBuilder();
       for (int c = 0; c + 16 <= xored.length; c += 16) {
-        final block = Uint8List.fromList(xored.sublist(c, c + 16));
+        final block = Uint8List.view(xored.buffer, xored.offsetInBytes + c, 16);
         decryptedAll.add(encrypter.decryptBytes(Encrypted(block)));
       }
       final dec = decryptedAll.toBytes();
