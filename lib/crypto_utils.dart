@@ -90,10 +90,13 @@ class CryptoUtils {
       final key = Key(keyBytes);
       final encrypter = Encrypter(AES(key, mode: AESMode.ecb, padding: null));
 
-      final xored = Uint8List.fromList(List<int>.generate(data.length, (i) => data[i] ^ 0x55));
+      final xored = Uint8List(data.length);
+      for (int i = 0; i < data.length; i++) {
+        xored[i] = data[i] ^ 0x55;
+      }
       final decryptedAll = BytesBuilder();
       for (int c = 0; c + 16 <= xored.length; c += 16) {
-        final block = Uint8List.fromList(xored.sublist(c, c + 16));
+        final block = Uint8List.sublistView(xored, c, c + 16);
         decryptedAll.add(encrypter.decryptBytes(Encrypted(block)));
       }
       final dec = decryptedAll.toBytes();
@@ -135,12 +138,13 @@ class CryptoUtils {
       final encrypter = Encrypter(AES(key, mode: AESMode.ecb, padding: null));
 
       // 2) XOR each byte with 0x55 (BLE EEG path) then decrypt in 16-byte blocks
-      final xored = Uint8List.fromList(
-        List<int>.generate(data.length, (i) => data[i] ^ 0x55),
-      );
+      final xored = Uint8List(data.length);
+      for (int i = 0; i < data.length; i++) {
+        xored[i] = data[i] ^ 0x55;
+      }
       final decryptedAll = BytesBuilder();
       for (int c = 0; c + 16 <= xored.length; c += 16) {
-        final block = Uint8List.fromList(xored.sublist(c, c + 16));
+        final block = Uint8List.sublistView(xored, c, c + 16);
         decryptedAll.add(encrypter.decryptBytes(Encrypted(block)));
       }
       final dec = decryptedAll.toBytes();
