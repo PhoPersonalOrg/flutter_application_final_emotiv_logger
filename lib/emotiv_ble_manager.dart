@@ -11,9 +11,6 @@ import 'services/network_streamer.dart';
 import 'settings/app_settings.dart';
 
 class EmotivBLEManager {
-  // TODO: get the device serial number dynamically upon connection using the following code:
-  // self.serial_number = bytes(("\x00" * 12),'utf-8') + bytearray.fromhex(str(BT_key[6:8] + BT_key[4:6] + BT_key[2:4] + BT_key[0:2]))
-
   // UUIDs from your Swift code
   static const String controlUuid = "81072F40-9F3D-11E3-A9DC-0002A5D5C51B";
   static const String eegDataUuid =
@@ -564,44 +561,30 @@ class EmotivBLEManager {
 
       _updateStatus("Connected to ${device.platformName}");
 
-      // TODO 2025-08-12 - get the device serial number to use as the decoding key
-      final btKeyValue = (RegExp(r'\(([^)]+)\)')
-          .firstMatch(device.platformName)
-          ?.group(1)); // "E50202E9" -> '6566565666756557'
-      // Emotiv Epoc+ (2025-08-13 - Apogee - from CyKit via USB Reciever)
-      // [32, 13, 6, 255, 6, 38, 59, 154, 204, 166, 43, 1, 128, 0, 16, 32, 16]
-      // Device Firmware = 0x6ff
-      // Software Firmware = 0x626
-      // Using Device: EEG Signals
-      // Serial Number: UD20221202006756
-      // AES Key = [54, 53, 53, 55, 55, 55, 53, 54, 54, 54, 53, 53, 54, 54, 53, 54]
+      // Extract 8-character hex Bluetooth key from device name (e.g. "EPOCX (E50202E9)")
+      final name = device.platformName.isNotEmpty ? device.platformName : device.advName;
+      final btKeyValue = RegExp(r'\(([0-9A-Fa-f]{8})\)').firstMatch(name)?.group(1) ??
+          RegExp(r'([0-9A-Fa-f]{8})').firstMatch(name)?.group(1);
 
-      // // Emotiv EpocX (2025-08-13 - Apogee - from CyKit via USB Reciever)
-      // [32, 32, 6, 255, 7, 32, 229, 2, 2, 233, 43, 1, 128, 0, 16, 32, 16]
-      // Device Firmware = 0x6ff
-      // Software Firmware = 0x720
-      // Using Device: EEG Signals
-      // Serial Number: UD20221202006756
-      // Company: None
-      // Device: None
-      // Vendor: 0x8086
-      // Product: 0x7ae0
-      // AES Key = [54, 53, 53, 55, 55, 55, 53, 54, 54, 54, 53, 53, 54, 54, 53, 54]
+      if (btKeyValue == null) {
+        _updateStatus(
+          "Warning: Could not extract Bluetooth key from device name: $name",
+        );
+      }
 
-      // "Found device: EPOCX (E50202E9)"
-      // "Found device: EPOC+ (3B9ACCA6)"
-      // serialNumber = _emotivDevice.advName
-      // INPUT: "E50202E9"
-      // List.generate(btKeyValue!.length ~/ 2, (i) {String pair = btKeyValue!.substring(i*2, i*2+2); return int.parse(pair, radix: 16).toString();}).join() // "22922233"
-      // btKeyValue!.split('').map((c) => int.parse(c, radix: 16).toString()).join() // "1450202149"
+      // Use the 8-char hex key as the serial number for identification
+      serialNumber = btKeyValue;
+      _updateStatus("Device Serial Number: $serialNumber");
 
       // Create 16-byte serial number bytes from BLE-advertised hex key (E.g. E50202E9)
-      Uint8List serialNumberList = CryptoUtils.createSerialNumber(btKeyValue!);
-      // Derive Epoc X key bytes per emotiv-lsl mapping (model 8)
-      _derivedKeyBytes = CryptoUtils.deriveEpocXKeyFromSerial(serialNumberList);
-      serialNumber = String.fromCharCodes(
-        _derivedKeyBytes!,
-      ); // keep legacy string for any UI/debug
+      if (btKeyValue != null) {
+        Uint8List serialNumberList = CryptoUtils.createSerialNumber(btKeyValue);
+        // Derive Epoc X key bytes per emotiv-lsl mapping (model 8)
+        _derivedKeyBytes = CryptoUtils.deriveEpocXKeyFromSerial(
+          serialNumberList,
+        );
+      }
+
       _networkStreamer?.updateDeviceId(serialNumber);
 
       // Initialize file writer after successful connection
