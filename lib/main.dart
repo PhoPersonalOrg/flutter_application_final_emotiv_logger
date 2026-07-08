@@ -62,6 +62,7 @@ class _EmotivHomePageState extends State<EmotivHomePage>
   // Add these new state variables
   List<String> _foundDevices = [];
   String _connectedDeviceName = '';
+  String? _connectingDeviceName;
 
   // EEG data history for table display
   List<Map<String, dynamic>> _eegRecords = [];
@@ -223,6 +224,9 @@ class _EmotivHomePageState extends State<EmotivHomePage>
 
   // Add this method to your _EmotivHomePageState class
   Future<void> _connectToDeviceByName(String deviceName) async {
+	setState(() {
+	  _connectingDeviceName = deviceName;
+	});
 	try {
 	  await _bleManager.connectToDeviceByName(deviceName);
 
@@ -237,6 +241,10 @@ class _EmotivHomePageState extends State<EmotivHomePage>
 		  backgroundColor: Colors.red,
 		),
 	  );
+	} finally {
+	  setState(() {
+		_connectingDeviceName = null;
+	  });
 	}
   }
 
@@ -416,6 +424,7 @@ class _EmotivHomePageState extends State<EmotivHomePage>
 			  isConnected: _isConnected,
 			  isScanning: _bleManager.isScanning,
 			  connectedDeviceName: _connectedDeviceName,
+			  connectingDeviceName: _connectingDeviceName,
 			  foundDevices: _foundDevices,
 			  onToggleScan: _toggleScanning,
 			  onDisconnect: _disconnect,
@@ -960,6 +969,7 @@ class ScannerWidget extends StatelessWidget {
   final VoidCallback onToggleScan;
   final List<String> foundDevices;
   final void Function(String deviceName) onConnectToDevice; // Add this
+  final String? connectingDeviceName;
 
   const ScannerWidget({
 	super.key,
@@ -967,6 +977,7 @@ class ScannerWidget extends StatelessWidget {
 	required this.onToggleScan,
 	required this.foundDevices,
 	required this.onConnectToDevice, // Add this
+	this.connectingDeviceName,
   });
 
   @override
@@ -1001,8 +1012,16 @@ class ScannerWidget extends StatelessWidget {
 			  children: [
 				Expanded(child: Text('• $device')),
 				ElevatedButton(
-				  onPressed: () => onConnectToDevice(device),
-				  child: const Text('Connect'),
+					  onPressed: connectingDeviceName == device
+						  ? null
+						  : () => onConnectToDevice(device),
+					  child: connectingDeviceName == device
+						  ? const SizedBox(
+							  width: 16,
+							  height: 16,
+							  child: CircularProgressIndicator(strokeWidth: 2),
+							)
+						  : const Text('Connect'),
 				),
 			  ],
 			),
@@ -1055,6 +1074,7 @@ class BluetoothControlWidget extends StatelessWidget {
   final bool isConnected;
   final bool isScanning;
   final String connectedDeviceName;
+  final String? connectingDeviceName;
   final List<String> foundDevices;
   final VoidCallback onToggleScan;
   final VoidCallback onDisconnect;
@@ -1065,6 +1085,7 @@ class BluetoothControlWidget extends StatelessWidget {
 	required this.isConnected,
 	required this.isScanning,
 	required this.connectedDeviceName,
+	this.connectingDeviceName,
 	required this.foundDevices,
 	required this.onToggleScan,
 	required this.onDisconnect,
@@ -1083,6 +1104,7 @@ class BluetoothControlWidget extends StatelessWidget {
 			onToggleScan: onToggleScan,
 			foundDevices: foundDevices,
 			onConnectToDevice: onConnectToDevice,
+			connectingDeviceName: connectingDeviceName,
 		  );
   }
 }
