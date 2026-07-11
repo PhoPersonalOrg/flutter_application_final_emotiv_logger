@@ -1004,29 +1004,41 @@ class ScannerWidget extends StatelessWidget {
 
 		const SizedBox(height: 8),
 
-		// Device list with connect buttons
-		...foundDevices.map(
-		  (device) => Padding(
-			padding: const EdgeInsets.symmetric(vertical: 4.0),
-			child: Row(
-			  children: [
-				Expanded(child: Text('• $device')),
-				ElevatedButton(
-					  onPressed: connectingDeviceName == device
-						  ? null
-						  : () => onConnectToDevice(device),
-					  child: connectingDeviceName == device
-						  ? const SizedBox(
-							  width: 16,
-							  height: 16,
-							  child: CircularProgressIndicator(strokeWidth: 2),
-							)
-						  : const Text('Connect'),
-				),
-			  ],
+		if (foundDevices.isEmpty)
+		  const Padding(
+			padding: EdgeInsets.symmetric(vertical: 8.0),
+			child: Text(
+			  'No devices found. Ensure headset is powered on and in range.',
+			  style: TextStyle(
+				color: Colors.grey,
+				fontStyle: FontStyle.italic,
+			  ),
+			),
+		  )
+		else
+		  // Device list with connect buttons
+		  ...foundDevices.map(
+			(device) => Padding(
+			  padding: const EdgeInsets.symmetric(vertical: 4.0),
+			  child: Row(
+				children: [
+				  Expanded(child: Text('• $device')),
+				  ElevatedButton(
+						onPressed: connectingDeviceName == device
+							? null
+							: () => onConnectToDevice(device),
+						child: connectingDeviceName == device
+							? const SizedBox(
+								width: 16,
+								height: 16,
+								child: CircularProgressIndicator(strokeWidth: 2),
+							  )
+							: const Text('Connect'),
+				  ),
+				],
+			  ),
 			),
 		  ),
-		),
 	  ],
 	);
   }
