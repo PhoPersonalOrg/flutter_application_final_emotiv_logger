@@ -42,11 +42,9 @@ class _EmotivHomePageState extends State<EmotivHomePage>
   final EmotivBLEManager _bleManager = EmotivBLEManager();
   final AppSettingsRepository _settingsRepository = AppSettingsRepository();
   List<double> _latestEEGData = [];
-  List<double> _latestMotionData = [];
   String _statusMessage = "Ready to connect";
   bool _isConnected = false;
   late StreamSubscription _eegSubscription;
-  late StreamSubscription _motionSubscription;
   late StreamSubscription _statusSubscription;
   late StreamSubscription _connectionSubscription;
   late StreamSubscription _networkStatusSubscription;
@@ -108,17 +106,7 @@ class _EmotivHomePageState extends State<EmotivHomePage>
 	  }
 	});
 
-	_motionSubscription = _bleManager.motionDataStream.listen((data) {
-	  final now = DateTime.now();
-	  if (now.difference(_lastUiUpdate) >= _uiUpdateInterval) {
-		_lastUiUpdate = now;
-		if (mounted) {
-		  setState(() {
-			_latestMotionData = data;
-		  });
-		}
-	  }
-	});
+	// _motionSubscription removed due to unused field
 
 	_statusSubscription = _bleManager.statusStream.listen((status) {
 	  setState(() {
@@ -263,7 +251,6 @@ class _EmotivHomePageState extends State<EmotivHomePage>
   void dispose() {
 	WidgetsBinding.instance.removeObserver(this);
 	_eegSubscription.cancel();
-	_motionSubscription.cancel();
 	_statusSubscription.cancel();
 	_connectionSubscription.cancel();
 	_networkStatusSubscription.cancel();
@@ -1003,6 +990,15 @@ class ScannerWidget extends StatelessWidget {
 		const Text('Found headsets:'),
 
 		const SizedBox(height: 8),
+
+		if (foundDevices.isEmpty)
+		  Padding(
+			padding: const EdgeInsets.only(left: 8.0, top: 8.0, bottom: 8.0),
+			child: Text(
+			  isScanning ? 'Scanning for headsets...' : 'No headsets found. Click Start to scan.',
+			  style: const TextStyle(color: Colors.grey, fontStyle: FontStyle.italic),
+			),
+		  ),
 
 		// Device list with connect buttons
 		...foundDevices.map(
