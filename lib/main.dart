@@ -363,6 +363,7 @@ class _EmotivHomePageState extends State<EmotivHomePage>
 		  IconButton(
 				tooltip: 'Settings',
 			icon: const Icon(Icons.settings),
+            tooltip: 'Settings',
 			onPressed: _settingsLoaded ? () => _openFileSettings() : null,
 		  ),
 		],
