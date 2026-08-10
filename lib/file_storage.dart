@@ -1,15 +1,14 @@
-import 'package:flutter/material.dart';
-import 'package:permission_handler/permission_handler.dart';
-import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 import 'dart:async';
+import 'package:path_provider/path_provider.dart';
 
 
 class FileStorage {
-  Future<String> get _localPath async {
-	final directory = await getApplicationDocumentsDirectory();
+  Future<String>? _cachedLocalPath;
 
-	return directory.path;
+  Future<String> get _localPath {
+    _cachedLocalPath ??= getApplicationDocumentsDirectory().then((dir) => dir.path);
+    return _cachedLocalPath!;
   }
 
   Future<File> get _localFile async {
