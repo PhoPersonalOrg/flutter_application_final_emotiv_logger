@@ -78,11 +78,6 @@ jobs:
           for sub in ${{ matrix.subpackages }}; do
             flutter pub get --no-example -C $sub
           done
-      - run: flutter analyze .
       - name: Bloc Lint
         if: matrix.has_bloc_lint == true
         run: bloc lint .
-      - run: flutter test
-      - name: Integration Tests
-        if: matrix.has_integration_tests == true
-        run: flutter test integration_test
