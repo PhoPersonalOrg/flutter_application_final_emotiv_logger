@@ -1003,6 +1003,18 @@ class ScannerWidget extends StatelessWidget {
 		const Text('Found headsets:'),
 
 		const SizedBox(height: 8),
+		// Empty states
+		if (foundDevices.isEmpty) if (isScanning)
+		  const Padding(
+			padding: EdgeInsets.symmetric(vertical: 8.0),
+			child: Text('Searching for devices...'),
+		  ),
+		if (foundDevices.isEmpty) if (!isScanning)
+		  const Padding(
+			padding: EdgeInsets.symmetric(vertical: 8.0),
+			child: Text('No devices found. Ensure your headset is turned on.'),
+		  ),
+
 
 		// Device list with connect buttons
 		...foundDevices.map(
