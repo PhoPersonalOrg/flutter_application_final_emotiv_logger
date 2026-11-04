@@ -28,11 +28,105 @@
       "sideBarSectionHeader.border": "#cecece"
     },
     "python.languageServer": "None",
-    "dart.flutterSdkPath": ".fvm/versions/3.42.0-0.0.pre"
+    "dart.flutterSdkPath": ".fvm/versions/3.42.0-0.0.pre",
+    "actionButtons": {
+      "defaultColor": "white",
+      "reloadButton": "↻",
+      "loadNpmCommands": false,
+      "customVars": {
+        "iphoneSimId": "E884CA5F-6395-47DE-9E0D-FEC64F87C57D",
+        "iphoneSimName": "iPhone 17 Pro",
+        "ipadSimId": "8B916372-9C14-4DE4-9C67-4DFBBFC2466E",
+        "ipadSimName": "iPad Pro 11-inch"
+      },
+      "commands": [
+        {
+          "name": "$(tools) Build iOS Sim",
+          "color": "#ed9600",
+          "tooltip": "Build Runner.app for the iOS simulator (no launch)",
+          "useVsCodeApi": false,
+          "singleInstance": true,
+          "terminalName": "Flutter iOS Build",
+          "cwd": "${workspaceFolder}",
+          "command": "fvm flutter build ios --simulator -d ${iphoneSimId}"
+        },
+        {
+          "name": "$(play) Run iPhone",
+          "color": "#4ec9b0",
+          "tooltip": "Boot iPhone 17 Pro simulator and flutter run",
+          "useVsCodeApi": false,
+          "singleInstance": true,
+          "terminalName": "Flutter Run iPhone",
+          "cwd": "${workspaceFolder}",
+          "command": "xcrun simctl boot ${iphoneSimId} 2>/dev/null || true; open -a Simulator; fvm flutter run -d ${iphoneSimId}"
+        },
+        {
+          "name": "$(device-tablet) Run iPad",
+          "color": "#4ec9b0",
+          "tooltip": "Boot iPad Pro 11-inch simulator and flutter run",
+          "useVsCodeApi": false,
+          "singleInstance": true,
+          "terminalName": "Flutter Run iPad",
+          "cwd": "${workspaceFolder}",
+          "command": "xcrun simctl boot ${ipadSimId} 2>/dev/null || true; open -a Simulator; fvm flutter run -d ${ipadSimId}"
+        },
+        {
+          "name": "$(rocket) Deploy iPhone",
+          "color": "#569cd6",
+          "tooltip": "Install last simulator build and launch on iPhone 17 Pro (no rebuild)",
+          "useVsCodeApi": false,
+          "singleInstance": true,
+          "terminalName": "Flutter Deploy iPhone",
+          "cwd": "${workspaceFolder}",
+          "command": "xcrun simctl boot ${iphoneSimId} 2>/dev/null || true; open -a Simulator; xcrun simctl install ${iphoneSimId} build/ios/iphonesimulator/Runner.app && xcrun simctl launch ${iphoneSimId} com.PhoHale.flutterEmotivLogger"
+        },
+        {
+          "name": "$(device-mobile) Open Sim",
+          "color": "#c586c0",
+          "tooltip": "Boot iPhone 17 Pro and open Simulator.app",
+          "useVsCodeApi": false,
+          "singleInstance": true,
+          "terminalName": "Open Simulator",
+          "cwd": "${workspaceFolder}",
+          "command": "xcrun simctl boot ${iphoneSimId} 2>/dev/null || true; open -a Simulator"
+        },
+        {
+          "name": "$(trash) Clean iOS",
+          "color": "#f44747",
+          "tooltip": "flutter clean + remove ios/Pods and Podfile.lock",
+          "useVsCodeApi": false,
+          "singleInstance": true,
+          "terminalName": "Flutter Clean iOS",
+          "cwd": "${workspaceFolder}",
+          "command": "fvm flutter clean && rm -rf ios/Pods ios/Podfile.lock ios/.symlinks build/ios && fvm flutter pub get && (cd ios && pod install)"
+        },
+        {
+          "name": "$(package) Pub Get",
+          "color": "#dcdcaa",
+          "tooltip": "fvm flutter pub get",
+          "useVsCodeApi": false,
+          "singleInstance": true,
+          "terminalName": "Flutter Pub Get",
+          "cwd": "${workspaceFolder}",
+          "command": "fvm flutter pub get"
+        },
+        {
+          "name": "$(list-flat) Devices",
+          "color": "#9cdcfe",
+          "tooltip": "List Flutter devices and available simulators",
+          "useVsCodeApi": false,
+          "singleInstance": true,
+          "terminalName": "Flutter Devices",
+          "cwd": "${workspaceFolder}",
+          "command": "fvm flutter devices && echo \"---\" && xcrun simctl list devices available"
+        }
+      ]
+    }
   },
   "extensions": {
     "recommendations": [
-      "dart-code.flutter"
+      "dart-code.flutter",
+      "seunlanlege.action-buttons"
     ]
   }
 }
