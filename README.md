@@ -1,162 +1,80 @@
-# flutter_application_final_emotiv_logger
+# Emotiv Acquisition Logger
 
-A new Flutter project that tries to decrypt Emotiv Epoc X (or Emotiv Epoc+) data over BLE and stream it over the network via LabStreamingLayer (LSL).
+Flutter app that reliably acquires Emotiv Epoc X / Epoc+ EEG and motion over BLE, with **CSV + LSL as first-class sinks**. Network NDJSON streaming is optional and best-effort.
 
-Should work on Android, iOS, linux, and more!
-
-
-## Network Streaming (LSL Alternative)
-
-Android builds that cannot use the LabStreamingLayer plugin can still mirror EEG
-and motion samples to another machine. Open the in-app settings (gear icon) to:
-
-- Enable or disable the network stream
-- Enter the destination host, port, and choose UDP or TCP
-- Confirm the connection state from the **Network Stream** card on the home page
-
-Every sample is serialized as newline-delimited JSON that includes timestamps,
-channel count, and sample rate:
+## Architecture (acquisition-first)
 
 ```
-{"type":"eeg","timestamp":1732122331.123,"deviceId":"EpocX","values":[...],"meta":{"sampleRate":128.0,"channelCount":14}}
+Headset BLE → AcquisitionSession (FSM)
+                → DecodePipeline (isolate)
+                → SampleHub (bounded queues)
+                     ├─ CsvSink      (first-class)
+                     ├─ LslSink      (first-class; Degraded if native lib fails)
+                     ├─ NetworkSink  (best-effort, never backpressures BLE)
+                     └─ UI preview   (throttled)
 ```
 
-Use any server that can accept UDP/TCP JSON blobs to ingest the stream.
+Explicit states: `Idle → Scanning → Connecting → Preparing → Streaming`, with `Reconnecting` / `Stopping` / `Failed`. Subscriptions are cancelled as a bag on every session exit; teardown is awaited in order (stop packets → cancel notifies → flush CSV → close LSL → disconnect).
 
-### Test Receiver Script
+## Session files
 
-A Python receiver script is provided at `EXTERNAL/SCRIPTS/test_reciever.py` that can:
-- Receive network stream data from the Flutter app
-- Optionally rebroadcast to LSL outlets for compatibility with LSL-based tools
+Each connect creates:
 
-**Basic usage (network only):**
+```
+{saveDir}/session_{iso}/
+  session.json   # device name, key fingerprint, rates
+  eeg.csv        # wall_ms, mono_us, AF3…AF4
+  motion.csv     # wall_ms, mono_us, Acc/Gyro
+  raw.csv        # wall_ms, mono_us, kind, bytes
+```
+
+Timestamps are receive-time (headset clock is not available on this BLE path).
+
+## LSL
+
+In-process outlets via `lsl_flutter` only:
+
+| Stream | Type | Channels | Rate |
+|--------|------|----------|------|
+| Epoc X | EEG | 14 | 128 Hz |
+| Epoc X Motion | Accelerometer | 6 | 16 Hz |
+
+If outlet creation fails (e.g. Android `liblsl.so`), LSL becomes **Degraded** and acquisition + CSV continue.
+
+## Network streaming (optional)
+
+Settings → enable network stream (UDP/TCP NDJSON). Failures never pause BLE.
+
+Companion receiver:
+
 ```bash
 python EXTERNAL/SCRIPTS/test_reciever.py --port 9878
-```
-
-**With LSL rebroadcast:**
-```bash
+# optional LSL rebroadcast:
 pip install pylsl
 python EXTERNAL/SCRIPTS/test_reciever.py --lsl --port 9878
 ```
 
-When LSL rebroadcast is enabled, the script creates two LSL outlets:
-- **Epoc X** (EEG): 14 channels @ 128 Hz, type='EEG'
-- **Epoc X Motion** (SIGNAL): 6 channels @ 16 Hz, type='SIGNAL'
+## Setup (macOS)
 
-These streams are compatible with standard LSL tools like LabRecorder, BSL Stream Viewer, and MNE-LSL.
-
-## Getting Started
-
-This project is a starting point for a Flutter application.
-
-A few resources to get you started if this is your first Flutter project:
-
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
-
-
-# Setting up Flutter on macOS:
-You need to i nstall the flutter version manager `fvm`
 ```bash
 brew tap leoafarias/fvm
 brew install fvm
 fvm install 3.42.0-0.0.pre
-# Use a version in your project
 fvm use 3.42.0-0.0.pre
-
+fvm flutter pub get
 ```
 
+## Build / run
 
-## Capturing Bluetooth Emotiv EEG Logs
-
-
-### Transfer the log to your computer
-```bash
-PS C:\Users\pho\bin\platform-tools> .\adb bugreport 2025-07-22_bt_bugreport.zip
-/data/user_de/0/com.android.shell/files/bugreports/bugreport-lineage_walleye-BP1A.250505.005-2025-07-22-19-31-22.zip: 1 file pulled, 0 skipped. 27.1 MB/s (12042426 bytes in 0.423s)
-Bug report copied to 2025-07-22_bt_bugreport.zip
-
-```
-Extract the zip and find the `btsnoop_hci.log` file:
-```bash
-"C:\Users\pho\repos\EmotivEpoc\flutter_application_final_emotiv_logger\EXTERNAL\Emotiv_Epoc_Reverse_Engineering\2025-07-22_bt_bugreport\FS\data\misc\bluetooth\logs\btsnoop_hci.log"
-
-btsnooz.py BUG_REPORT.txt > BTSNOOP.log
-
-
-btsnooz.py C:\Users\pho\repos\EmotivEpoc\flutter_application_final_emotiv_logger\EXTERNAL\Emotiv_Epoc_Reverse_Engineering\2025-07-22_bt_bugreport\FS\data\misc\bluetooth\logs\btsnoop_hci.log > BTSNOOP.plaintext.log
-
-"C:\Users\pho\repos\EmotivEpoc\flutter_application_final_emotiv_logger\EXTERNAL\Emotiv_Epoc_Reverse_Engineering\fluoride\Bluetooth\system\tools\scripts\btsnooz.py" C:\Users\pho\repos\EmotivEpoc\flutter_application_final_emotiv_logger\EXTERNAL\Emotiv_Epoc_Reverse_Engineering\2025-07-22_bt_bugreport\FS\data\misc\bluetooth\logs\btsnoop_hci.log > BTSNOOP.plaintext.log
-
-
-"C:\Users\pho\repos\EmotivEpoc\flutter_application_final_emotiv_logger\EXTERNAL\Emotiv_Epoc_Reverse_Engineering\fluoride\Bluetooth\system\tools\scripts\btsnooz.py" "C:\Users\pho\repos\EmotivEpoc\flutter_application_final_emotiv_logger\EXTERNAL\Emotiv_Epoc_Reverse_Engineering\2025-07-22_bt_bugreport\bugreport-lineage_walleye-BP1A.250505.005-2025-07-22-19-31-22.txt" > BTSNOOP.plaintext.log
-
-
-"C:\Users\pho\repos\EmotivEpoc\flutter_application_final_emotiv_logger\EXTERNAL\Emotiv_Epoc_Reverse_Engineering\fluoride\Bluetooth\system\tools\scripts\btsnooz.py" "C:\Users\pho\repos\EmotivEpoc\flutter_application_final_emotiv_logger\EXTERNAL\Emotiv_Epoc_Reverse_Engineering\bugreport-lineage_walleye-BP1A.250505.005-2025-07-22-20-08-12\bugreport-lineage_walleye-BP1A.250505.005-2025-07-22-20-08-12.txt" > BTSNOOP.plaintext.log
-
-
-```
-
-https://stackoverflow.com/questions/28445552/bluetooth-hci-snoop-log-not-generated/30352487#30352487
-https://cs.android.com/android/platform/superproject/+/android-latest-release:packages/modules/Bluetooth/system/tools/scripts/btsnooz.py
-
-## For WSL on Windows:
-```bash
-
-sudo apt install git gnupg flex bison gperf build-essential \
-  zip curl zlib1g-dev gcc-multilib g++-multilib \
-  x11proto-core-dev libx11-dev libncurses5 \
-  libgl1-mesa-dev libxml2-utils xsltproc unzip liblz4-tool libssl-dev \
-  libc++-dev libevent-dev \
-  flatbuffers-compiler libflatbuffers1 openssl \
-  libflatbuffers-dev libfmt-dev libtinyxml2-dev \
-  libglib2.0-dev libevent-dev libnss3-dev libdbus-1-dev \
-  libprotobuf-dev ninja-build generate-ninja protobuf-compiler \
-  libre2-9 debmake \
-  llvm libc++abi-dev \
-  libre2-dev libdouble-conversion-dev \
-  libgtest-dev libgmock-dev libabsl-dev
-
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
-
-
-## Building for Android:
-Get the proper flutter NDK version: `ndkVersion = "27.0.12077973" // flutter.ndkVersion` from `android\app\build.gradle.kts`
+Use the status-bar Flutter device picker for the target, then:
 
 ```bash
-flutter build apk -v
-
-
-
+fvm flutter run
+# or workspace Action Buttons: Run Device / Debug Device / Build iOS
 ```
 
+iOS simulator builds work for UI only; **real headset acquisition requires a physical device**.
 
-#### Error with labstreaminglayer plugin on Android:
-```
-E/flutter (19189): [ERROR:flutter/runtime/dart_vm_initializer.cc(40)] Unhandled Exception: Invalid argument(s): Couldn't resolve native function 'lsl_library_version' in 'package:liblsl/native_liblsl.dart' : Failed to load dynamic library 'liblsl.so': Failed to load dynamic library 'liblsl.so': dlopen failed: cannot locate symbol "__cxa_init_primary_exception" referenced by "/data/app/~~_XT_ZyNq8_U7kKUBdpmOTQ==/com.PhoHale.flutter_emotiv_logger-CR14shtpBN91ELiS671AVw==/base.apk!/lib/arm64-v8a/liblsl.so"....
-```
+## Health UI
 
-### Simple Network Receiver Example
-
-For a minimal receiver without LSL rebroadcast:
-
-```python
-import json, socket
-
-sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sock.bind(("0.0.0.0", 7000))
-
-while True:
-    data, addr = sock.recvfrom(65535)
-    for line in data.splitlines():
-        sample = json.loads(line)
-        print(sample["type"], sample["timestamp"], sample["values"])
-```
-
-For full-featured receiver with LSL rebroadcast support, use `EXTERNAL/SCRIPTS/test_reciever.py` (see above).
+Home screen shows acquisition state, EEG/motion Hz, decode failures, gap count, CSV/LSL drop counts, LSL status, and session path.

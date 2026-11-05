@@ -33,62 +33,37 @@
       "defaultColor": "white",
       "reloadButton": "↻",
       "loadNpmCommands": false,
-      "customVars": {
-        "iphoneSimId": "E884CA5F-6395-47DE-9E0D-FEC64F87C57D",
-        "iphoneSimName": "iPhone 17 Pro",
-        "ipadSimId": "8B916372-9C14-4DE4-9C67-4DFBBFC2466E",
-        "ipadSimName": "iPad Pro 11-inch"
-      },
       "commands": [
         {
-          "name": "$(tools) Build iOS Sim",
+          "name": "$(tools) Build iOS",
           "color": "#ed9600",
-          "tooltip": "Build Runner.app for the iOS simulator (no launch)",
+          "tooltip": "flutter build ios (device; uses Xcode signing)",
           "useVsCodeApi": false,
           "singleInstance": true,
           "terminalName": "Flutter iOS Build",
           "cwd": "${workspaceFolder}",
-          "command": "fvm flutter build ios --simulator -d ${iphoneSimId}"
+          "command": "fvm flutter build ios"
         },
         {
-          "name": "$(play) Run iPhone",
+          "name": "$(play) Run Device",
           "color": "#4ec9b0",
-          "tooltip": "Boot iPhone 17 Pro simulator and flutter run",
-          "useVsCodeApi": false,
-          "singleInstance": true,
-          "terminalName": "Flutter Run iPhone",
-          "cwd": "${workspaceFolder}",
-          "command": "xcrun simctl boot ${iphoneSimId} 2>/dev/null || true; open -a Simulator; fvm flutter run -d ${iphoneSimId}"
+          "tooltip": "Start Without Debugging on the device selected in the Flutter status bar",
+          "useVsCodeApi": true,
+          "command": "workbench.action.debug.run"
         },
         {
-          "name": "$(device-tablet) Run iPad",
-          "color": "#4ec9b0",
-          "tooltip": "Boot iPad Pro 11-inch simulator and flutter run",
-          "useVsCodeApi": false,
-          "singleInstance": true,
-          "terminalName": "Flutter Run iPad",
-          "cwd": "${workspaceFolder}",
-          "command": "xcrun simctl boot ${ipadSimId} 2>/dev/null || true; open -a Simulator; fvm flutter run -d ${ipadSimId}"
-        },
-        {
-          "name": "$(rocket) Deploy iPhone",
+          "name": "$(debug-alt) Debug Device",
           "color": "#569cd6",
-          "tooltip": "Install last simulator build and launch on iPhone 17 Pro (no rebuild)",
-          "useVsCodeApi": false,
-          "singleInstance": true,
-          "terminalName": "Flutter Deploy iPhone",
-          "cwd": "${workspaceFolder}",
-          "command": "xcrun simctl boot ${iphoneSimId} 2>/dev/null || true; open -a Simulator; xcrun simctl install ${iphoneSimId} build/ios/iphonesimulator/Runner.app && xcrun simctl launch ${iphoneSimId} com.PhoHale.flutterEmotivLogger"
+          "tooltip": "Start Debugging on the device selected in the Flutter status bar",
+          "useVsCodeApi": true,
+          "command": "workbench.action.debug.start"
         },
         {
-          "name": "$(device-mobile) Open Sim",
+          "name": "$(device-mobile) Select Device",
           "color": "#c586c0",
-          "tooltip": "Boot iPhone 17 Pro and open Simulator.app",
-          "useVsCodeApi": false,
-          "singleInstance": true,
-          "terminalName": "Open Simulator",
-          "cwd": "${workspaceFolder}",
-          "command": "xcrun simctl boot ${iphoneSimId} 2>/dev/null || true; open -a Simulator"
+          "tooltip": "Flutter: Select Device (same as status-bar device picker)",
+          "useVsCodeApi": true,
+          "command": "flutter.selectDevice"
         },
         {
           "name": "$(trash) Clean iOS",
@@ -109,16 +84,6 @@
           "terminalName": "Flutter Pub Get",
           "cwd": "${workspaceFolder}",
           "command": "fvm flutter pub get"
-        },
-        {
-          "name": "$(list-flat) Devices",
-          "color": "#9cdcfe",
-          "tooltip": "List Flutter devices and available simulators",
-          "useVsCodeApi": false,
-          "singleInstance": true,
-          "terminalName": "Flutter Devices",
-          "cwd": "${workspaceFolder}",
-          "command": "fvm flutter devices && echo \"---\" && xcrun simctl list devices available"
         }
       ]
     }
