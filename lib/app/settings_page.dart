@@ -62,9 +62,34 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ListTile(
             title: const Text('Save directory'),
             subtitle: Text(_draft.saveDirectory ?? '(app documents)'),
-            trailing: IconButton(
-              icon: const Icon(Icons.folder_open),
-              onPressed: _pickDirectory,
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_draft.saveDirectory != null)
+                  IconButton(
+                    tooltip: 'Use app documents',
+                    icon: const Icon(Icons.clear),
+                    onPressed: () {
+                      setState(
+                        () => _draft = _draft.copyWith(clearSaveDirectory: true),
+                      );
+                    },
+                  ),
+                IconButton(
+                  tooltip: 'Pick folder',
+                  icon: const Icon(Icons.folder_open),
+                  onPressed: _pickDirectory,
+                ),
+              ],
+            ),
+          ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Text(
+              'App documents is the reliable default. Custom folders often lose '
+              'permission on iOS/Android after relaunch; acquisition will fall '
+              'back automatically if a custom path is denied.',
+              style: TextStyle(fontSize: 12, color: Colors.black54),
             ),
           ),
           SwitchListTile(

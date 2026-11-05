@@ -199,6 +199,10 @@ class _HealthCard extends StatelessWidget {
                 _metric('Decode fail', '${health.decodeFailures}'),
                 _metric('Gaps', '${health.gapCount}'),
                 _metric('CSV drop', '${health.csvDropped}'),
+                _metric(
+                  'CSV',
+                  health.csvUsingFallback ? 'Fallback' : 'OK',
+                ),
                 _metric('LSL drop', '${health.lslDropped}'),
                 _metric('LSL', lslLabel),
                 _metric(
@@ -209,8 +213,19 @@ class _HealthCard extends StatelessWidget {
                 ),
               ],
             ),
-            if (health.csvSessionPath != null) ...[
+            if (health.csvMessage != null) ...[
               const SizedBox(height: 8),
+              Text(
+                health.csvMessage!,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: health.csvUsingFallback
+                          ? Colors.orange.shade900
+                          : null,
+                    ),
+              ),
+            ],
+            if (health.csvSessionPath != null) ...[
+              const SizedBox(height: 4),
               Text(
                 health.csvSessionPath!,
                 style: Theme.of(context).textTheme.bodySmall,

@@ -213,13 +213,29 @@ class AcquisitionSession {
       await _decodeSub?.cancel();
       _decodeSub = _decode.results.listen(_onDecodeResult);
 
-      final sessionPath = await _csv.startSession(
-        saveDirectory: _settings.saveDirectory,
-        identity: _identity!,
-      );
-      _mutateHealth(
-        (h) => h.copyWith(csvSessionPath: sessionPath),
-      );
+      // CSV is first-class but must never abort BLE arming.
+      var sessionPath = '';
+      try {
+        final csvStart = await _csv.startSession(
+          saveDirectory: _settings.saveDirectory,
+          identity: _identity!,
+        );
+        sessionPath = csvStart.sessionPath;
+        _mutateHealth(
+          (h) => h.copyWith(
+            csvSessionPath: csvStart.sessionPath,
+            csvMessage: csvStart.message,
+            csvUsingFallback: csvStart.usedFallback,
+          ),
+        );
+      } catch (e) {
+        _mutateHealth(
+          (h) => h.copyWith(
+            csvMessage: 'CSV unavailable: $e (acquisition continues)',
+            csvUsingFallback: true,
+          ),
+        );
+      }
 
       await _lsl.start(
         enabled: _settings.lslEnabled,
@@ -246,7 +262,9 @@ class AcquisitionSession {
       _emit(
         AcquisitionStreaming(
           deviceName: name,
-          sessionDir: sessionPath,
+          sessionDir: sessionPath.isEmpty
+              ? (_health.csvSessionPath ?? '(no csv)')
+              : sessionPath,
           health: _health,
         ),
       );

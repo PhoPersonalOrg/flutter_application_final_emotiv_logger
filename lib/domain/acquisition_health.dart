@@ -14,6 +14,8 @@ class AcquisitionHealth {
     this.lslStatus = LslSubsystemStatus.idle,
     this.lslMessage,
     this.csvSessionPath,
+    this.csvMessage,
+    this.csvUsingFallback = false,
     this.reconnectAttempt = 0,
     this.networkEnabled = false,
     this.networkConnected = false,
@@ -33,6 +35,8 @@ class AcquisitionHealth {
   final LslSubsystemStatus lslStatus;
   final String? lslMessage;
   final String? csvSessionPath;
+  final String? csvMessage;
+  final bool csvUsingFallback;
   final int reconnectAttempt;
   final bool networkEnabled;
   final bool networkConnected;
@@ -54,6 +58,8 @@ class AcquisitionHealth {
     LslSubsystemStatus? lslStatus,
     String? lslMessage,
     String? csvSessionPath,
+    String? csvMessage,
+    bool? csvUsingFallback,
     int? reconnectAttempt,
     bool? networkEnabled,
     bool? networkConnected,
@@ -73,6 +79,8 @@ class AcquisitionHealth {
       lslStatus: lslStatus ?? this.lslStatus,
       lslMessage: lslMessage ?? this.lslMessage,
       csvSessionPath: csvSessionPath ?? this.csvSessionPath,
+      csvMessage: csvMessage ?? this.csvMessage,
+      csvUsingFallback: csvUsingFallback ?? this.csvUsingFallback,
       reconnectAttempt: reconnectAttempt ?? this.reconnectAttempt,
       networkEnabled: networkEnabled ?? this.networkEnabled,
       networkConnected: networkConnected ?? this.networkConnected,
