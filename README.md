@@ -59,10 +59,12 @@ python EXTERNAL/SCRIPTS/test_reciever.py --lsl --port 9878
 ```bash
 brew tap leoafarias/fvm
 brew install fvm
-fvm install 3.42.0-0.0.pre
-fvm use 3.42.0-0.0.pre
+fvm install 3.47.9
+fvm use 3.47.9
 fvm flutter pub get
 ```
+
+Android builds require **JDK 17+** (Java 25 works with this project's Gradle **9.3.1** / AGP **9.1.1**). Prefer `fvm flutter` so the pin matches the build.
 
 ## Build / run
 
@@ -70,6 +72,8 @@ Use the status-bar Flutter device picker for the target, then:
 
 ```bash
 fvm flutter run
+# Pixel 2 example:
+fvm flutter run -d FA7B71A02109
 # or workspace Action Buttons: Run Device / Debug Device / Build iOS
 ```
 

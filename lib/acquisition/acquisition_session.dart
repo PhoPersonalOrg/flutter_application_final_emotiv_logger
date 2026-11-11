@@ -183,7 +183,7 @@ class AcquisitionSession {
     try {
       await device.connect(
         timeout: const Duration(seconds: 15),
-        license: License.free,
+        license: License.nonprofit,
       );
       _device = device;
       await _prepareAndStream(device);
@@ -480,7 +480,7 @@ class AcquisitionSession {
       try {
         await device.connect(
           timeout: const Duration(seconds: 15),
-          license: License.free,
+          license: License.nonprofit,
         );
         _device = device;
         await _prepareAndStream(device);

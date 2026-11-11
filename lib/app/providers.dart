@@ -11,24 +11,22 @@ final settingsRepositoryProvider = Provider<AppSettingsRepository>((ref) {
 });
 
 final settingsProvider =
-    StateNotifierProvider<SettingsNotifier, AppSettings>((ref) {
-  return SettingsNotifier(ref.watch(settingsRepositoryProvider));
-});
+    NotifierProvider<SettingsNotifier, AppSettings>(SettingsNotifier.new);
 
-class SettingsNotifier extends StateNotifier<AppSettings> {
-  SettingsNotifier(this._repo) : super(const AppSettings()) {
-    _load();
+class SettingsNotifier extends Notifier<AppSettings> {
+  @override
+  AppSettings build() {
+    Future.microtask(_load);
+    return const AppSettings();
   }
 
-  final AppSettingsRepository _repo;
-
   Future<void> _load() async {
-    state = await _repo.load();
+    state = await ref.read(settingsRepositoryProvider).load();
   }
 
   Future<void> save(AppSettings next) async {
     state = next;
-    await _repo.save(next);
+    await ref.read(settingsRepositoryProvider).save(next);
   }
 }
 
