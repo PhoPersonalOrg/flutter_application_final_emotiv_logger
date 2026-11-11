@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import '../domain/samples.dart';
 import 'crypto_codec.dart';
+import 'eeg_counter_monitor.dart';
 
 /// Offloads AES/motion parse so BLE notify never blocks on crypto.
 class DecodePipeline {
@@ -39,8 +40,18 @@ class DecodePipeline {
     if (!_ready.isCompleted) _ready.complete();
   }
 
+  /// Forget per-session decode state (EEG counter tracking). Call when a new
+  /// headset session starts; the isolate outlives individual sessions.
+  void resetSession() {
+    _workerPort?.send(const _ResetJob());
+  }
+
   /// Enqueue raw packet for decode (non-blocking after isolate is ready).
-  void submit(RawPacket packet, {required Uint8List keyBytes}) {
+  void submit(
+    RawPacket packet, {
+    required Uint8List keyBytes,
+    int eegResolutionBits = CryptoCodec.defaultEegResolutionBits,
+  }) {
     final port = _workerPort;
     if (port == null) return;
     port.send(
@@ -48,6 +59,7 @@ class DecodePipeline {
         kindIndex: packet.kind.index,
         bytes: packet.bytes,
         keyBytes: keyBytes,
+        eegResolutionBits: eegResolutionBits,
         receiveMonoUs: packet.receiveMonoUs,
         wallMs: packet.wallClock.millisecondsSinceEpoch,
       ),
@@ -73,49 +85,86 @@ class DecodePipeline {
     final inbox = ReceivePort();
     boot.handshake.send(inbox.sendPort);
     final out = boot.results;
+    final counters = EegCounterMonitor();
 
     inbox.listen((message) {
+      if (message is _ResetJob) {
+        counters.reset();
+        return;
+      }
       if (message is! _DecodeJob) return;
       final kind = PacketKind.values[message.kindIndex];
-      try {
-        final wall = DateTime.fromMillisecondsSinceEpoch(message.wallMs);
-        switch (kind) {
-          case PacketKind.eeg:
-            final values = CryptoCodec.decryptEeg(
-              message.keyBytes,
-              message.bytes,
-            );
-            out.send(
-              DecodeEegOk(
-                EegSample(
-                  values: values,
-                  receiveMonoUs: message.receiveMonoUs,
-                  wallClock: wall,
-                ),
-              ),
-            );
-          case PacketKind.motion:
-            final values = CryptoCodec.decodeMotion(message.bytes);
-            out.send(
-              DecodeMotionOk(
-                MotionSample(
-                  values: values,
-                  receiveMonoUs: message.receiveMonoUs,
-                  wallClock: wall,
-                ),
-              ),
-            );
-        }
-      } catch (e) {
+
+      void fail(String text) {
         out.send(
           DecodeFailed(
             DecodeError(
               kind: kind,
-              message: e.toString(),
+              message: text,
               receiveMonoUs: message.receiveMonoUs,
             ),
           ),
         );
+      }
+
+      try {
+        final wall = DateTime.fromMillisecondsSinceEpoch(message.wallMs);
+        switch (kind) {
+          case PacketKind.eeg:
+            // A notification may carry several 32-byte packages.
+            final frames = CryptoCodec.decryptEegFrames(
+              message.keyBytes,
+              message.bytes,
+            );
+            for (final frame in frames) {
+              final warning = counters.add(frame.counter);
+              if (warning != null) fail(warning);
+              if (frame.isMotionType) {
+                fail(
+                  'Skipped a motion-type (0x20) package received on the EEG '
+                  'characteristic',
+                );
+                continue;
+              }
+              out.send(
+                DecodeEegOk(
+                  EegSample(
+                    values: frame.values,
+                    receiveMonoUs: message.receiveMonoUs,
+                    wallClock: wall,
+                  ),
+                ),
+              );
+            }
+          case PacketKind.motion:
+            // A notification may carry several 20-byte packages.
+            final bytes = message.bytes;
+            if (bytes.length < CryptoCodec.motionPacketBytes) {
+              throw ArgumentError('Motion packet must be at least 20 bytes');
+            }
+            for (var offset = 0;
+                offset + CryptoCodec.motionPacketBytes <= bytes.length;
+                offset += CryptoCodec.motionPacketBytes) {
+              final values = CryptoCodec.decodeMotion(
+                Uint8List.sublistView(
+                  bytes,
+                  offset,
+                  offset + CryptoCodec.motionPacketBytes,
+                ),
+              );
+              out.send(
+                DecodeMotionOk(
+                  MotionSample(
+                    values: values,
+                    receiveMonoUs: message.receiveMonoUs,
+                    wallClock: wall,
+                  ),
+                ),
+              );
+            }
+        }
+      } catch (e) {
+        fail(e.toString());
       }
     });
   }
@@ -125,6 +174,10 @@ class _Bootstrap {
   _Bootstrap(this.handshake, this.results);
   final SendPort handshake;
   final SendPort results;
+}
+
+class _ResetJob {
+  const _ResetJob();
 }
 
 class _DecodeJob {

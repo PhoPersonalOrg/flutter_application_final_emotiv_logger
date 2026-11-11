@@ -210,6 +210,8 @@ class AcquisitionSession {
       _keyBytes = _identity!.keyBytes;
 
       await _decode.start();
+      _decode.resetSession();
+      _mutateHealth((h) => h.copyWith(clearDecodeMessage: true));
       await _decodeSub?.cancel();
       _decodeSub = _decode.results.listen(_onDecodeResult);
 
@@ -281,19 +283,38 @@ class AcquisitionSession {
     BluetoothCharacteristic? eegChar;
     BluetoothCharacteristic? motionChar;
 
+    BluetoothCharacteristic? serviceBControl;
+
     for (final service in services) {
       for (final c in service.characteristics) {
-        final id = c.uuid.toString().toUpperCase();
-        if (id == EmotivBleUuids.eeg) {
-          eegChar = c;
-        } else if (id == EmotivBleUuids.motion) {
+        final id = c.uuid.toString();
+        if (EmotivBleUuids.isEeg(id)) {
+          // Prefer service A's EEG characteristic when both are present.
+          if (eegChar == null ||
+              id.toUpperCase() == EmotivBleUuids.eeg) {
+            eegChar = c;
+          }
+        } else if (EmotivBleUuids.isMotion(id)) {
           motionChar = c;
+        } else if (EmotivBleUuids.isServiceBControl(id)) {
+          serviceBControl = c;
         }
       }
     }
 
     if (eegChar == null) {
       throw StateError('EEG characteristic not found');
+    }
+
+    // The official Android app writes 02 1E to the service-B control
+    // characteristic during discovery, when the headset exposes it.
+    if (serviceBControl != null) {
+      try {
+        await serviceBControl.write(
+          EmotivBleUuids.serviceBControlInit,
+          withoutResponse: false,
+        );
+      } catch (_) {}
     }
 
     await eegChar.setNotifyValue(true);
@@ -314,16 +335,8 @@ class AcquisitionSession {
       );
     }
 
-    // Start command (0x100 LE) — may be redundant but matches headset protocol.
-    final startCmd = Uint8List.fromList([0x00, 0x01, 0x00, 0x00]);
-    try {
-      await eegChar.write(startCmd, withoutResponse: false);
-    } catch (_) {}
-    if (motionChar != null) {
-      try {
-        await motionChar.write(startCmd, withoutResponse: false);
-      } catch (_) {}
-    }
+    // Enabling notifications is all that starts the stream; the official app
+    // writes nothing to the EEG or motion characteristics.
   }
 
   void _enqueueRaw(PacketKind kind, List<int> data) {
@@ -372,8 +385,8 @@ class AcquisitionSession {
       case DecodeMotionOk():
         _motionWindow++;
         _mutateHealth((h) => h.copyWith(motionPackets: h.motionPackets + 1));
-      case DecodeFailed():
-        break;
+      case DecodeFailed(:final error):
+        _mutateHealth((h) => h.copyWith(decodeMessage: error.message));
     }
     _hub.publishDecode(result);
     _refreshStreamingHealth();

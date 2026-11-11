@@ -6,6 +6,7 @@ class AcquisitionHealth {
     this.eegHz = 0,
     this.motionHz = 0,
     this.decodeFailures = 0,
+    this.decodeMessage,
     this.csvDropped = 0,
     this.lslDropped = 0,
     this.networkDropped = 0,
@@ -27,6 +28,9 @@ class AcquisitionHealth {
   final double eegHz;
   final double motionHz;
   final int decodeFailures;
+
+  /// Text of the most recent decode failure or decrypt-plausibility warning.
+  final String? decodeMessage;
   final int csvDropped;
   final int lslDropped;
   final int networkDropped;
@@ -50,6 +54,8 @@ class AcquisitionHealth {
     double? eegHz,
     double? motionHz,
     int? decodeFailures,
+    String? decodeMessage,
+    bool clearDecodeMessage = false,
     int? csvDropped,
     int? lslDropped,
     int? networkDropped,
@@ -71,6 +77,9 @@ class AcquisitionHealth {
       eegHz: eegHz ?? this.eegHz,
       motionHz: motionHz ?? this.motionHz,
       decodeFailures: decodeFailures ?? this.decodeFailures,
+      decodeMessage: clearDecodeMessage
+          ? null
+          : (decodeMessage ?? this.decodeMessage),
       csvDropped: csvDropped ?? this.csvDropped,
       lslDropped: lslDropped ?? this.lslDropped,
       networkDropped: networkDropped ?? this.networkDropped,

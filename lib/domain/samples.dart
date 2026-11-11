@@ -51,7 +51,8 @@ class EegSample {
   final DateTime wallClock;
 }
 
-/// Parsed 6-channel motion sample (Acc XYZ + Gyro XYZ).
+/// Parsed 10-channel motion sample: orientation quaternion, accelerometer (g)
+/// and magnetometer. The Epoc X motion package carries no gyroscope data.
 class MotionSample {
   const MotionSample({
     required this.values,
@@ -60,15 +61,19 @@ class MotionSample {
   });
 
   static const channelNames = [
+    'Q0',
+    'Q1',
+    'Q2',
+    'Q3',
     'AccX',
     'AccY',
     'AccZ',
-    'GyroX',
-    'GyroY',
-    'GyroZ',
+    'MagX',
+    'MagY',
+    'MagZ',
   ];
 
-  static const int channelCount = 6;
+  static const int channelCount = 10;
   static const double nominalRateHz = 16.0;
 
   final List<double> values;

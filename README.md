@@ -24,11 +24,19 @@ Each connect creates:
 {saveDir}/session_{iso}/
   session.json   # device name, key fingerprint, rates
   eeg.csv        # wall_ms, mono_us, AF3…AF4
-  motion.csv     # wall_ms, mono_us, Acc/Gyro
+  motion.csv     # wall_ms, mono_us, Q0…Q3, AccX/Y/Z, MagX/Y/Z
   raw.csv        # wall_ms, mono_us, kind, bytes
 ```
 
 Timestamps are receive-time (headset clock is not available on this BLE path).
+
+## Decoding
+
+Packet layouts, channel order and scale factors follow the EmotivPRO V4 Android library (see `lib/decode/crypto_codec.dart` for the function each one was read from).
+
+- **EEG**: 32-byte packages, XOR `0x55` + AES-128-ECB. Values are microvolts, `raw / 7.8`, which assumes the headset is in 16-bit mode; the app does not read the headset's resolution setting. A 14-bit headset needs `raw / 1.95`: if every EEG value in a recording stays below 2100 µV, set `CryptoCodec.defaultEegResolutionBits` to 14.
+- **Motion**: 20-byte unencrypted packages holding an orientation quaternion, accelerometer (g) and magnetometer. There is no gyroscope data in the Epoc X motion package.
+- **Not supported**: headset firmware newer than `0x73e` (AES-256 keying) and headsets switched to legacy EPOC mode. Both decrypt to noise; the Health card shows a warning when the EEG package counters stop being sequential. `raw.csv` always keeps the undecrypted packets.
 
 ## LSL
 
@@ -37,7 +45,7 @@ In-process outlets via `lsl_flutter` only:
 | Stream | Type | Channels | Rate |
 |--------|------|----------|------|
 | Epoc X | EEG | 14 | 128 Hz |
-| Epoc X Motion | Accelerometer | 6 | 16 Hz |
+| Epoc X Motion | Accelerometer | 10 (Q0–Q3, Acc XYZ, Mag XYZ) | 16 Hz |
 
 If outlet creation fails (e.g. Android `liblsl.so`), LSL becomes **Degraded** and acquisition + CSV continue.
 

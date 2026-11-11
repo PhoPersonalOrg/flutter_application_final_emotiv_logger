@@ -213,6 +213,15 @@ class _HealthCard extends StatelessWidget {
                 ),
               ],
             ),
+            if (health.decodeMessage != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                health.decodeMessage!,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Colors.orange.shade900,
+                    ),
+              ),
+            ],
             if (health.csvMessage != null) ...[
               const SizedBox(height: 8),
               Text(

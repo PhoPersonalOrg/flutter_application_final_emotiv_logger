@@ -67,30 +67,34 @@ class LSLRebroadcaster:
         self.eeg_outlet = StreamOutlet(eeg_info)
         print("✓ Created LSL outlet: Epoc X (EEG, 14 channels @ 128 Hz)")
 
-        # Motion stream: 6 channels @ 16 Hz
-        motion_channel_names = ['AccX', 'AccY', 'AccZ', 'GyroX', 'GyroY', 'GyroZ']
+        # Motion stream: 10 channels @ 16 Hz.
+        # (label, unit, type); the magnetometer unit is not known, the app
+        # sends the raw reading divided by 6 as the official software does.
+        motion_channels = [
+            ('Q0', 'normalized', 'QUAT'), ('Q1', 'normalized', 'QUAT'),
+            ('Q2', 'normalized', 'QUAT'), ('Q3', 'normalized', 'QUAT'),
+            ('AccX', 'g', 'ACC'), ('AccY', 'g', 'ACC'), ('AccZ', 'g', 'ACC'),
+            ('MagX', '', 'MAG'), ('MagY', '', 'MAG'), ('MagZ', '', 'MAG'),
+        ]
+        self.motion_channel_count = len(motion_channels)
         motion_info = StreamInfo(
             name='Epoc X Motion',
             type='SIGNAL',
-            channel_count=6,
+            channel_count=self.motion_channel_count,
             nominal_srate=16.0,
             channel_format=pylsl.cf_float32,
             source_id='network_receiver_motion'
         )
         # Add channel labels
         chns = motion_info.desc().append_child("channels")
-        for i, label in enumerate(motion_channel_names[:3]):
+        for label, unit, kind in motion_channels:
             ch = chns.append_child("channel")
             ch.append_child_value("label", label)
-            ch.append_child_value("unit", "g")
-            ch.append_child_value("type", "ACC")
-        for i, label in enumerate(motion_channel_names[3:]):
-            ch = chns.append_child("channel")
-            ch.append_child_value("label", label)
-            ch.append_child_value("unit", "deg/s")
-            ch.append_child_value("type", "GYRO")
+            ch.append_child_value("unit", unit)
+            ch.append_child_value("type", kind)
         self.motion_outlet = StreamOutlet(motion_info)
-        print("✓ Created LSL outlet: Epoc X Motion (SIGNAL, 6 channels @ 16 Hz)")
+        print(f"✓ Created LSL outlet: Epoc X Motion (SIGNAL, "
+              f"{self.motion_channel_count} channels @ 16 Hz)")
 
         self._initialized = True
         print("LSL rebroadcast enabled. Streams available for LSL clients.")
@@ -111,10 +115,11 @@ class LSLRebroadcaster:
                 else:
                     print(f"Warning: EEG sample has {len(values)} channels, expected 14")
             elif stream_type == 'motion' and self.motion_outlet:
-                if len(values) == 6:
+                if len(values) == self.motion_channel_count:
                     self.motion_outlet.push_sample(values, lsl_timestamp)
                 else:
-                    print(f"Warning: Motion sample has {len(values)} channels, expected 6")
+                    print(f"Warning: Motion sample has {len(values)} channels, "
+                          f"expected {self.motion_channel_count}")
             else:
                 print(f"Warning: Unknown stream type '{stream_type}' or outlet not initialized")
         except Exception as e:
