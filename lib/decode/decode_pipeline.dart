@@ -115,6 +115,7 @@ class DecodePipeline {
             final frames = CryptoCodec.decryptEegFrames(
               message.keyBytes,
               message.bytes,
+              resolutionBits: message.eegResolutionBits,
             );
             for (final frame in frames) {
               final warning = counters.add(frame.counter);
@@ -185,6 +186,7 @@ class _DecodeJob {
     required this.kindIndex,
     required this.bytes,
     required this.keyBytes,
+    required this.eegResolutionBits,
     required this.receiveMonoUs,
     required this.wallMs,
   });
@@ -192,6 +194,7 @@ class _DecodeJob {
   final int kindIndex;
   final Uint8List bytes;
   final Uint8List keyBytes;
+  final int eegResolutionBits;
   final int receiveMonoUs;
   final int wallMs;
 }
