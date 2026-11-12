@@ -30,11 +30,15 @@ Each connect creates:
 
 Timestamps are receive-time (headset clock is not available on this BLE path).
 
+## Sessions tab (transfer)
+
+Bottom nav **Sessions** lists prior `session_*` folders. Multi-select and transfer over **SFTP** (`dartssh2`) or **SMB** (`dart_smb2`) to a remembered server bookmark (host/user/path in SharedPreferences; optional password in secure storage). The live recording folder is not transferable/deletable while acquisition is open. SFTP over Tailscale is the usual path; SMB on LAN may need Local Network permission on iOS.
+
 ## Decoding
 
 Packet layouts, channel order and scale factors follow the EmotivPRO V4 Android library (see `lib/decode/crypto_codec.dart` for the function each one was read from).
 
-- **EEG**: 32-byte packages, XOR `0x55` + AES-128-ECB. Values are microvolts, `raw / 7.8`, which assumes the headset is in 16-bit mode; the app does not read the headset's resolution setting. A 14-bit headset needs `raw / 1.95`: if every EEG value in a recording stays below 2100 µV, set `CryptoCodec.defaultEegResolutionBits` to 14.
+- **EEG**: 32-byte packages, XOR `0x55` + AES-128-ECB. ADC divisor comes from the headset config characteristic when present (`/1.95` for 14-bit, `/7.8` for 16-bit); otherwise defaults to 16-bit.
 - **Motion**: 20-byte unencrypted packages holding an orientation quaternion, accelerometer (g) and magnetometer. There is no gyroscope data in the Epoc X motion package.
 - **Not supported**: headset firmware newer than `0x73e` (AES-256 keying) and headsets switched to legacy EPOC mode. Both decrypt to noise; the Health card shows a warning when the EEG package counters stop being sequential. `raw.csv` always keeps the undecrypted packets.
 
@@ -89,4 +93,4 @@ iOS simulator builds work for UI only; **real headset acquisition requires a phy
 
 ## Health UI
 
-Home screen shows acquisition state, EEG/motion Hz, decode failures, gap count, CSV/LSL drop counts, LSL status, and session path.
+Record tab shows acquisition state, EEG/motion Hz, decode failures, gap count, CSV/LSL drop counts, LSL status, and session path.

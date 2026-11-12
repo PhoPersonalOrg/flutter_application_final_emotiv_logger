@@ -22,6 +22,8 @@ class AppSettings {
     this.networkHost = defaultHost,
     this.networkPort = defaultPort,
     this.networkProtocol = NetworkProtocol.udp,
+    this.preferredDeviceId,
+    this.preferredDeviceName,
   });
 
   final String? saveDirectory;
@@ -30,6 +32,10 @@ class AppSettings {
   final String networkHost;
   final int networkPort;
   final NetworkProtocol networkProtocol;
+
+  /// Last successfully connected headset (for one-tap reconnect).
+  final String? preferredDeviceId;
+  final String? preferredDeviceName;
 
   static const String defaultHost = 'apogee.tailc8d2c6.ts.net';
   static const int defaultPort = 9878;
@@ -42,6 +48,9 @@ class AppSettings {
     String? networkHost,
     int? networkPort,
     NetworkProtocol? networkProtocol,
+    String? preferredDeviceId,
+    String? preferredDeviceName,
+    bool clearPreferredDevice = false,
   }) {
     return AppSettings(
       saveDirectory: clearSaveDirectory
@@ -52,6 +61,12 @@ class AppSettings {
       networkHost: networkHost ?? this.networkHost,
       networkPort: networkPort ?? this.networkPort,
       networkProtocol: networkProtocol ?? this.networkProtocol,
+      preferredDeviceId: clearPreferredDevice
+          ? null
+          : (preferredDeviceId ?? this.preferredDeviceId),
+      preferredDeviceName: clearPreferredDevice
+          ? null
+          : (preferredDeviceName ?? this.preferredDeviceName),
     );
   }
 }
@@ -64,6 +79,8 @@ class AppSettingsRepository {
   static const _networkHostKey = '${_prefix}networkHost';
   static const _networkPortKey = '${_prefix}networkPort';
   static const _networkProtocolKey = '${_prefix}networkProtocol';
+  static const _preferredDeviceIdKey = '${_prefix}preferredDeviceId';
+  static const _preferredDeviceNameKey = '${_prefix}preferredDeviceName';
 
   Future<AppSettings> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -76,6 +93,8 @@ class AppSettingsRepository {
       networkProtocol: NetworkProtocolX.fromStorage(
         prefs.getString(_networkProtocolKey),
       ),
+      preferredDeviceId: prefs.getString(_preferredDeviceIdKey),
+      preferredDeviceName: prefs.getString(_preferredDeviceNameKey),
     );
   }
 
@@ -94,5 +113,21 @@ class AppSettingsRepository {
       _networkProtocolKey,
       settings.networkProtocol.storageValue,
     );
+    if (settings.preferredDeviceId != null) {
+      await prefs.setString(
+        _preferredDeviceIdKey,
+        settings.preferredDeviceId!,
+      );
+    } else {
+      await prefs.remove(_preferredDeviceIdKey);
+    }
+    if (settings.preferredDeviceName != null) {
+      await prefs.setString(
+        _preferredDeviceNameKey,
+        settings.preferredDeviceName!,
+      );
+    } else {
+      await prefs.remove(_preferredDeviceNameKey);
+    }
   }
 }

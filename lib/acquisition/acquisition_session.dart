@@ -5,8 +5,10 @@ import 'dart:typed_data';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 import '../app/settings.dart';
+import '../decode/crypto_codec.dart';
 import '../decode/decode_pipeline.dart';
 import '../decode/device_identity.dart';
+import '../decode/headset_config.dart';
 import '../domain/acquisition_health.dart';
 import '../domain/acquisition_state.dart';
 import '../domain/ble_uuids.dart';
@@ -19,14 +21,21 @@ import 'session_subscriptions.dart';
 
 /// Owns the BLE acquisition FSM, decode pipeline, and sinks.
 class AcquisitionSession {
-  AcquisitionSession({AppSettings? initialSettings})
-      : _settings = initialSettings ?? const AppSettings() {
+  AcquisitionSession({
+    AppSettings? initialSettings,
+    Future<void> Function(AppSettings settings)? persistSettings,
+  })  : _settings = initialSettings ?? const AppSettings(),
+        _persistSettings = persistSettings {
+    _preferredId = _settings.preferredDeviceId;
+    _preferredName = _settings.preferredDeviceName;
     _hub = SampleHub(onHealth: _mutateHealth);
     _csv = CsvSink(hub: _hub);
     _lsl = LslSink(hub: _hub, onHealth: _mutateHealth);
     _network = NetworkSink(hub: _hub, onHealth: _mutateHealth);
     _stateController.add(const AcquisitionIdle());
   }
+
+  final Future<void> Function(AppSettings settings)? _persistSettings;
 
   final _stateController =
       StreamController<AcquisitionState>.broadcast(sync: true);
@@ -40,6 +49,7 @@ class AcquisitionSession {
 
   final _subs = SessionSubscriptions();
   StreamSubscription? _decodeSub;
+  StreamSubscription? _scanActiveSub;
   Timer? _rateTimer;
   Timer? _reconnectTimer;
 
@@ -48,13 +58,16 @@ class AcquisitionSession {
   AcquisitionHealth _health = const AcquisitionHealth();
 
   final Map<String, BluetoothDevice> _discovered = {};
+  final Map<String, int> _rssi = {};
   BluetoothDevice? _device;
   String? _preferredName;
   String? _preferredId;
   DeviceIdentity? _identity;
   Uint8List? _keyBytes;
+  int _eegResolutionBits = CryptoCodec.defaultEegResolutionBits;
   bool _acceptPackets = false;
   bool _userStopRequested = false;
+  bool _autoConnectPreferred = false;
   int _reconnectAttempt = 0;
   int _eegWindow = 0;
   int _motionWindow = 0;
@@ -64,9 +77,13 @@ class AcquisitionSession {
   AcquisitionState get state => _state;
   AcquisitionHealth get health => _health;
   SampleHub get hub => _hub;
+  String? get preferredDeviceId => _preferredId;
+  String? get preferredDeviceName => _preferredName;
 
   Future<void> updateSettings(AppSettings settings) async {
     _settings = settings;
+    _preferredId = settings.preferredDeviceId ?? _preferredId;
+    _preferredName = settings.preferredDeviceName ?? _preferredName;
     if (_state is AcquisitionStreaming || _state is AcquisitionPreparing) {
       await _network.configure(
         settings: settings,
@@ -75,56 +92,91 @@ class AcquisitionSession {
     }
   }
 
-  Future<void> startScan() async {
+  Future<void> startScan({bool autoConnectPreferred = false}) async {
     if (_state is! AcquisitionIdle &&
         _state is! AcquisitionFailed &&
         _state is! AcquisitionScanning) {
       return;
     }
     await _cancelReconnect();
+    await _stopScanRadio();
     _discovered.clear();
-    _emit(AcquisitionScanning(devices: const [], health: _health));
+    _rssi.clear();
+    _autoConnectPreferred = autoConnectPreferred;
+    _emit(
+      AcquisitionScanning(
+        devices: const [],
+        active: true,
+        preferredId: _preferredId,
+        health: _health,
+      ),
+    );
 
     try {
+      final adapter = await _ensureAdapterReady();
+      if (!adapter) return;
+
+      await _seedAlreadyConnected();
+
       await FlutterBluePlus.startScan(
-        withServices: [Guid(EmotivBleUuids.control)],
+        withServices: [
+          Guid(EmotivBleUuids.control),
+          Guid(EmotivBleUuids.serviceB),
+        ],
         timeout: const Duration(seconds: 30),
+        androidUsesFineLocation: true,
       );
+
+      _scanActiveSub?.cancel();
+      _scanActiveSub = FlutterBluePlus.isScanning.listen((scanning) {
+        if (!scanning && _state is AcquisitionScanning) {
+          final current = _state as AcquisitionScanning;
+          if (current.active) {
+            _emit(current.copyWith(active: false));
+          }
+        }
+      });
+
       _subs.add(
         FlutterBluePlus.scanResults.listen((results) {
           for (final r in results) {
-            final name = r.device.platformName;
-            if (name.isEmpty) continue;
-            _discovered[r.device.remoteId.str] = r.device;
+            _considerScanResult(r.device, r.rssi);
           }
-          final devices = _discovered.entries
-              .map(
-                (e) => DiscoveredDevice(
-                  id: e.key,
-                  name: e.value.platformName,
-                ),
-              )
-              .toList();
-          if (_state is AcquisitionScanning) {
-            _emit(
-              AcquisitionScanning(devices: devices, health: _health),
-            );
+          _publishScanDevices();
+          if (_autoConnectPreferred) {
+            unawaited(_tryAutoConnectPreferred());
           }
         }),
       );
+      _publishScanDevices();
     } catch (e) {
-      await stopScan();
+      await _stopScanRadio();
       _emit(AcquisitionFailed(message: 'Scan failed: $e', health: _health));
     }
   }
 
+  /// Scan and connect to the last used headset when it appears.
+  Future<void> reconnectPreferred() async {
+    final id = _preferredId;
+    if (id == null) {
+      await startScan();
+      return;
+    }
+    await _seedAlreadyConnected();
+    final known = _discovered[id];
+    if (known != null) {
+      await connect(id);
+      return;
+    }
+    await startScan(autoConnectPreferred: true);
+  }
+
   Future<void> stopScan() async {
-    try {
-      await FlutterBluePlus.stopScan();
-    } catch (_) {}
-    await _subs.cancelAll();
+    await _stopScanRadio();
+    _autoConnectPreferred = false;
     if (_state is AcquisitionScanning) {
-      _emit(AcquisitionIdle(health: _health));
+      final current = _state as AcquisitionScanning;
+      _emit(current.copyWith(active: false));
     }
   }
 
@@ -141,9 +193,10 @@ class AcquisitionSession {
     }
     _preferredId = deviceId;
     _preferredName = device.platformName;
+    _autoConnectPreferred = false;
     _userStopRequested = false;
     _reconnectAttempt = 0;
-    await stopScan();
+    await _stopScanRadio();
     await _connectDevice(device);
   }
 
@@ -167,6 +220,7 @@ class AcquisitionSession {
   Future<void> dispose() async {
     _userStopRequested = true;
     await _cancelReconnect();
+    await _stopScanRadio();
     await _orderedTeardown(disconnectBle: true);
     await _decode.dispose();
     await _hub.dispose();
@@ -206,14 +260,30 @@ class AcquisitionSession {
     );
 
     try {
-      _identity = _identityResolver.resolveFromName(name);
-      _keyBytes = _identity!.keyBytes;
-
       await _decode.start();
       _decode.resetSession();
       _mutateHealth((h) => h.copyWith(clearDecodeMessage: true));
       await _decodeSub?.cancel();
       _decodeSub = _decode.results.listen(_onDecodeResult);
+
+      _subs.add(
+        device.connectionState.listen((s) {
+          if (s == BluetoothConnectionState.disconnected) {
+            unawaited(_onLinkLost());
+          }
+        }),
+      );
+
+      // Discover + config/serial extract must happen before CSV/LSL so identity
+      // can fall back to DIS serial when the advertising name is incomplete.
+      await _armNotifications(device);
+
+      _identity ??= _identityResolver.resolveFromName(name);
+      _keyBytes = _identity!.keyBytes;
+      await _rememberPreferred(
+        id: device.remoteId.str,
+        name: _identity!.deviceName,
+      );
 
       // CSV is first-class but must never abort BLE arming.
       var sessionPath = '';
@@ -248,22 +318,13 @@ class AcquisitionSession {
         deviceId: _identity!.btKeyHex,
       );
 
-      _subs.add(
-        device.connectionState.listen((s) {
-          if (s == BluetoothConnectionState.disconnected) {
-            unawaited(_onLinkLost());
-          }
-        }),
-      );
-
-      await _armNotifications(device);
       _acceptPackets = true;
       _reconnectAttempt = 0;
       _startRateMonitor();
 
       _emit(
         AcquisitionStreaming(
-          deviceName: name,
+          deviceName: name.isEmpty ? _identity!.deviceName : name,
           sessionDir: sessionPath.isEmpty
               ? (_health.csvSessionPath ?? '(no csv)')
               : sessionPath,
@@ -282,28 +343,62 @@ class AcquisitionSession {
     final services = await device.discoverServices();
     BluetoothCharacteristic? eegChar;
     BluetoothCharacteristic? motionChar;
-
     BluetoothCharacteristic? serviceBControl;
+    BluetoothCharacteristic? headsetConfigChar;
+    BluetoothCharacteristic? disSerialChar;
 
     for (final service in services) {
       for (final c in service.characteristics) {
         final id = c.uuid.toString();
         if (EmotivBleUuids.isEeg(id)) {
           // Prefer service A's EEG characteristic when both are present.
-          if (eegChar == null ||
-              id.toUpperCase() == EmotivBleUuids.eeg) {
+          if (eegChar == null || id.toUpperCase() == EmotivBleUuids.eeg) {
             eegChar = c;
           }
         } else if (EmotivBleUuids.isMotion(id)) {
           motionChar = c;
         } else if (EmotivBleUuids.isServiceBControl(id)) {
           serviceBControl = c;
+        } else if (EmotivBleUuids.isHeadsetConfig(id)) {
+          headsetConfigChar = c;
+        } else if (_isDisSerial(id)) {
+          disSerialChar = c;
         }
       }
     }
 
     if (eegChar == null) {
       throw StateError('EEG characteristic not found');
+    }
+
+    _identity = _identityResolver.tryResolveFromName(device.platformName);
+    if (_identity == null && disSerialChar != null) {
+      try {
+        final raw = await disSerialChar.read();
+        final serial = String.fromCharCodes(raw).trim();
+        if (serial.isNotEmpty) {
+          _identity = _identityResolver.resolveFromSerialHex(
+            device.platformName.isEmpty ? serial : device.platformName,
+            serial.replaceAll(RegExp(r'[^A-Fa-f0-9]'), ''),
+          );
+        }
+      } catch (_) {}
+    }
+    if (_identity == null) {
+      throw StateError(
+        'Could not resolve headset serial from name or DIS',
+      );
+    }
+
+    _eegResolutionBits = CryptoCodec.defaultEegResolutionBits;
+    if (headsetConfigChar != null) {
+      try {
+        final bytes = await headsetConfigChar.read();
+        final config = HeadsetConfig.parse(bytes);
+        if (config?.eegResolutionBits != null) {
+          _eegResolutionBits = config!.eegResolutionBits!;
+        }
+      } catch (_) {}
     }
 
     // The official Android app writes 02 1E to the service-B control
@@ -362,7 +457,11 @@ class AcquisitionSession {
     _hub.publishRaw(packet);
     final key = _keyBytes;
     if (key != null) {
-      _decode.submit(packet, keyBytes: key);
+      _decode.submit(
+        packet,
+        keyBytes: key,
+        eegResolutionBits: _eegResolutionBits,
+      );
     }
 
     if (kind == PacketKind.eeg) {
@@ -468,18 +567,21 @@ class AcquisitionSession {
         device = _discovered[id];
       }
       if (device == null && id != null) {
-        // Try scan briefly for preferred device.
         try {
           await FlutterBluePlus.startScan(
-            withServices: [Guid(EmotivBleUuids.control)],
+            withServices: [
+              Guid(EmotivBleUuids.control),
+              Guid(EmotivBleUuids.serviceB),
+            ],
             timeout: const Duration(seconds: 8),
+            androidUsesFineLocation: true,
           );
           await Future<void>.delayed(const Duration(seconds: 2));
           for (final r in FlutterBluePlus.lastScanResults) {
+            _considerScanResult(r.device, r.rssi);
             if (r.device.remoteId.str == id ||
                 r.device.platformName == _preferredName) {
               device = r.device;
-              _discovered[r.device.remoteId.str] = r.device;
               break;
             }
           }
@@ -512,6 +614,162 @@ class AcquisitionSession {
   Future<void> _cancelReconnect() async {
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
+  }
+
+  Future<bool> _ensureAdapterReady() async {
+    try {
+      if (await FlutterBluePlus.isSupported == false) {
+        _emit(
+          AcquisitionFailed(
+            message: 'Bluetooth LE is not supported on this device',
+            health: _health,
+          ),
+        );
+        return false;
+      }
+    } catch (_) {}
+
+    BluetoothAdapterState adapterState;
+    try {
+      adapterState = await FlutterBluePlus.adapterState
+          .where((s) => s != BluetoothAdapterState.unknown)
+          .first
+          .timeout(const Duration(seconds: 3));
+    } catch (_) {
+      adapterState = FlutterBluePlus.adapterStateNow;
+    }
+
+    if (adapterState == BluetoothAdapterState.off ||
+        adapterState == BluetoothAdapterState.unavailable ||
+        adapterState == BluetoothAdapterState.unauthorized) {
+      _emit(
+        AcquisitionFailed(
+          message: 'Bluetooth is $adapterState. Turn it on and allow '
+              'nearby-device permission, then scan again.',
+          health: _health,
+        ),
+      );
+      return false;
+    }
+    return true;
+  }
+
+  Future<void> _seedAlreadyConnected() async {
+    try {
+      final connected = FlutterBluePlus.connectedDevices;
+      for (final d in connected) {
+        _considerScanResult(d, _rssi[d.remoteId.str] ?? 0);
+      }
+    } catch (_) {}
+  }
+
+  void _considerScanResult(BluetoothDevice device, int rssi) {
+    final name = device.platformName;
+    final id = device.remoteId.str;
+    final parsed = name.isEmpty
+        ? null
+        : _identityResolver.tryParseAdvertisement(name);
+    final isPreferred = id == _preferredId ||
+        (_preferredName != null && name == _preferredName);
+
+    // Keep service-filtered hits even when the local name is empty (common on
+    // some Android stacks until GAP name is read); prefer parseable Emotiv names.
+    if (name.isNotEmpty && parsed == null && !isPreferred) {
+      return;
+    }
+
+    _discovered[id] = device;
+    if (rssi != 0 || !_rssi.containsKey(id)) {
+      _rssi[id] = rssi;
+    }
+  }
+
+  void _publishScanDevices() {
+    if (_state is! AcquisitionScanning) return;
+    final current = _state as AcquisitionScanning;
+    final devices = _discovered.entries.map((e) {
+      final name = e.value.platformName;
+      final parsed = _identityResolver.tryParseAdvertisement(name);
+      return DiscoveredDevice(
+        id: e.key,
+        name: name.isEmpty ? '(unnamed Emotiv)' : name,
+        rssi: _rssi[e.key],
+        serialHex: parsed?.serialHex,
+        isPreferred: e.key == _preferredId ||
+            (_preferredName != null && name == _preferredName),
+      );
+    }).toList()
+      ..sort((a, b) {
+        if (a.isPreferred != b.isPreferred) {
+          return a.isPreferred ? -1 : 1;
+        }
+        final ar = a.rssi ?? -999;
+        final br = b.rssi ?? -999;
+        return br.compareTo(ar);
+      });
+    _emit(
+      current.copyWith(
+        devices: devices,
+        preferredId: _preferredId,
+        health: _health,
+      ),
+    );
+  }
+
+  Future<void> _tryAutoConnectPreferred() async {
+    if (!_autoConnectPreferred) return;
+    final id = _preferredId;
+    if (id == null) return;
+    if (!_discovered.containsKey(id)) {
+      if (_preferredName == null) return;
+      String? match;
+      for (final e in _discovered.entries) {
+        if (e.value.platformName == _preferredName) {
+          match = e.key;
+          break;
+        }
+      }
+      if (match == null) return;
+      _autoConnectPreferred = false;
+      await connect(match);
+      return;
+    }
+    _autoConnectPreferred = false;
+    await connect(id);
+  }
+
+  Future<void> _stopScanRadio() async {
+    try {
+      await FlutterBluePlus.stopScan();
+    } catch (_) {}
+    await _scanActiveSub?.cancel();
+    _scanActiveSub = null;
+    // Cancel scan-result listeners only; keep connection/notify subs intact.
+    await _subs.cancelAll();
+  }
+
+  Future<void> _rememberPreferred({
+    required String id,
+    required String name,
+  }) async {
+    _preferredId = id;
+    _preferredName = name;
+    final next = _settings.copyWith(
+      preferredDeviceId: id,
+      preferredDeviceName: name,
+    );
+    _settings = next;
+    final persist = _persistSettings;
+    if (persist != null) {
+      try {
+        await persist(next);
+      } catch (_) {}
+    }
+  }
+
+  bool _isDisSerial(String uuid) {
+    final id = uuid.toUpperCase().replaceAll('-', '');
+    return id == '00002A2500001000800000805F9B34FB' || id == '2A25';
   }
 
   /// Ordered teardown: stop packets → cancel notifies → flush CSV → close LSL → disconnect.

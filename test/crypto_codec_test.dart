@@ -232,16 +232,35 @@ void main() {
   });
 
   group('DeviceIdentityResolver', () {
-    test('parses name hex key', () {
-      final id = DeviceIdentityResolver().resolveFromName('EPOCX (E50202E9)');
+    final resolver = DeviceIdentityResolver();
+
+    test('parses parentheses advertising name', () {
+      final id = resolver.resolveFromName('EPOCX (E50202E9)');
       expect(id.btKeyHex, 'E50202E9');
       expect(id.keyBytes.length, 16);
       expect(id.keyFingerprint, contains('E50202E9'));
     });
 
-    test('throws on missing key', () {
+    test('parses space and hyphen advertising forms', () {
       expect(
-        () => DeviceIdentityResolver().resolveFromName('EPOCX'),
+        resolver.tryParseAdvertisement('EPOCX E50202E9')?.serialHex,
+        'E50202E9',
+      );
+      expect(
+        resolver.tryParseAdvertisement('EPOCX-E50202E9')?.serialHex,
+        'E50202E9',
+      );
+      expect(
+        resolver.tryParseAdvertisement('EPOC+ (E50202E9)')?.serialHex,
+        'E50202E9',
+      );
+    });
+
+    test('rejects non-Emotiv names', () {
+      expect(resolver.tryParseAdvertisement('EPOCX'), isNull);
+      expect(resolver.tryParseAdvertisement('Pixel Buds'), isNull);
+      expect(
+        () => resolver.resolveFromName('EPOCX'),
         throwsStateError,
       );
     });

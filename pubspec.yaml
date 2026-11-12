@@ -19,7 +19,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 version: 1.0.1+1
 
 environment:
-  sdk: ^3.8.1
+  sdk: ^3.10.0
 
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions
@@ -37,6 +37,10 @@ dependencies:
   file_picker: ^13.3.3
   device_info_plus: ^13.3.0
   shared_preferences: ^2.5.3
+  flutter_secure_storage: ^11.2.0
+  path: ^1.9.1
+  dartssh2: ^4.1.0
+  dart_smb2: ^0.3.0
   lsl_flutter: ^0.0.6
   flutter_riverpod: ^3.5.0
   riverpod: ^3.5.0
@@ -96,3 +100,9 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+# encrypt 5.x pins pointycastle ^3; dartssh2 4 needs ^4. Override is safe for
+# our AES-ECB usage in CryptoCodec.
+dependency_overrides:
+  pointycastle: ^4.0.0
+

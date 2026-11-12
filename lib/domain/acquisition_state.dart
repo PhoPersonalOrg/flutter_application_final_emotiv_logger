@@ -21,23 +21,36 @@ class AcquisitionIdle extends AcquisitionState {
 class AcquisitionScanning extends AcquisitionState {
   const AcquisitionScanning({
     required this.devices,
+    this.active = true,
+    this.preferredId,
     this.health = const AcquisitionHealth(),
   });
 
   final List<DiscoveredDevice> devices;
 
+  /// True while the BLE radio scan is running; false after timeout/stop so
+  /// the device list remains visible for connect.
+  final bool active;
+
+  /// Last successfully used device id, if any (for UI highlight).
+  final String? preferredId;
+
   @override
   final AcquisitionHealth health;
 
   @override
-  String get label => 'Scanning';
+  String get label => active ? 'Scanning' : 'Devices found';
 
   AcquisitionScanning copyWith({
     List<DiscoveredDevice>? devices,
+    bool? active,
+    String? preferredId,
     AcquisitionHealth? health,
   }) {
     return AcquisitionScanning(
       devices: devices ?? this.devices,
+      active: active ?? this.active,
+      preferredId: preferredId ?? this.preferredId,
       health: health ?? this.health,
     );
   }
@@ -154,9 +167,16 @@ class DiscoveredDevice {
     required this.id,
     required this.name,
     this.rssi,
+    this.serialHex,
+    this.isPreferred = false,
   });
 
   final String id;
   final String name;
   final int? rssi;
+
+  /// Parsed advertising serial when the name matches Emotiv patterns.
+  final String? serialHex;
+
+  final bool isPreferred;
 }

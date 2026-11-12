@@ -94,7 +94,7 @@ class _Body extends ConsumerWidget {
         _Controls(state: state),
         const SizedBox(height: 12),
         if (state is AcquisitionScanning) ...[
-          _DeviceList(devices: (state as AcquisitionScanning).devices),
+          _DeviceList(scanning: state as AcquisitionScanning),
           const SizedBox(height: 12),
         ],
         if (state is AcquisitionFailed) ...[
@@ -278,59 +278,116 @@ class _Controls extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final session = ref.read(acquisitionSessionProvider);
+    final settings = ref.watch(settingsProvider);
     final canScan = state is AcquisitionIdle ||
         state is AcquisitionFailed ||
         state is AcquisitionScanning;
     final scanning = state is AcquisitionScanning;
+    final scanActive = scanning && (state as AcquisitionScanning).active;
     final streaming = state is AcquisitionStreaming ||
         state is AcquisitionPreparing ||
         state is AcquisitionConnecting ||
         state is AcquisitionReconnecting;
+    final preferredName =
+        settings.preferredDeviceName ?? session.preferredDeviceName;
 
-    return Row(
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
       children: [
         if (!streaming)
           FilledButton.icon(
             onPressed: canScan
-                ? () => scanning ? session.stopScan() : session.startScan()
+                ? () => scanActive ? session.stopScan() : session.startScan()
                 : null,
-            icon: Icon(scanning ? Icons.stop : Icons.bluetooth_searching),
-            label: Text(scanning ? 'Stop scan' : 'Scan'),
+            icon: Icon(
+              scanActive ? Icons.stop : Icons.bluetooth_searching,
+            ),
+            label: Text(scanActive ? 'Stop scan' : 'Scan'),
           ),
-        if (streaming) ...[
+        if (!streaming &&
+            preferredName != null &&
+            preferredName.isNotEmpty &&
+            canScan)
+          FilledButton.tonalIcon(
+            onPressed: scanActive
+                ? null
+                : () => session.reconnectPreferred(),
+            icon: const Icon(Icons.link),
+            label: Text('Reconnect $preferredName'),
+          ),
+        if (streaming)
           FilledButton.tonalIcon(
             onPressed: () => session.disconnect(),
             icon: const Icon(Icons.link_off),
             label: const Text('Stop'),
           ),
-        ],
       ],
     );
   }
 }
 
 class _DeviceList extends ConsumerWidget {
-  const _DeviceList({required this.devices});
-  final List<DiscoveredDevice> devices;
+  const _DeviceList({required this.scanning});
+  final AcquisitionScanning scanning;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final devices = scanning.devices;
     if (devices.isEmpty) {
-      return const Card(
-        child: ListTile(title: Text('Scanning for Emotiv headsets…')),
+      return Card(
+        child: ListTile(
+          leading: scanning.active
+              ? const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.bluetooth_disabled),
+          title: Text(
+            scanning.active
+                ? 'Scanning for Emotiv headsets…'
+                : 'No Emotiv headsets found',
+          ),
+          subtitle: Text(
+            scanning.active
+                ? 'Looking for EPOC / Epoc X advertising names'
+                : 'Power the headset, wear it nearby, then scan again',
+          ),
+        ),
       );
     }
     return Card(
       child: Column(
         children: [
+          ListTile(
+            dense: true,
+            title: Text(
+              scanning.active
+                  ? 'Found ${devices.length} · scanning…'
+                  : 'Found ${devices.length} · tap Connect',
+            ),
+          ),
           for (final d in devices)
             ListTile(
+              leading: Icon(
+                d.isPreferred ? Icons.star : Icons.headphones,
+                color: d.isPreferred
+                    ? Theme.of(context).colorScheme.primary
+                    : null,
+              ),
               title: Text(d.name),
-              subtitle: Text(d.id),
+              subtitle: Text(
+                [
+                  if (d.serialHex != null) 'SN ${d.serialHex}',
+                  if (d.rssi != null) '${d.rssi} dBm',
+                  d.id,
+                ].join(' · '),
+              ),
               trailing: FilledButton(
                 onPressed: () =>
                     ref.read(acquisitionSessionProvider).connect(d.id),
-                child: const Text('Connect'),
+                child: Text(d.isPreferred ? 'Reconnect' : 'Connect'),
               ),
             ),
         ],
