@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:path_provider/path_provider.dart';
 
+import '../app/save_directory_policy.dart';
 import '../decode/device_identity.dart';
 import '../domain/samples.dart';
 import 'sample_hub.dart';
@@ -46,9 +47,8 @@ class CsvSink {
     await stop();
     _closed = false;
 
-    final preferred = (saveDirectory != null && saveDirectory.isNotEmpty)
-        ? saveDirectory
-        : null;
+    // iOS: ignore custom paths (File Provider / picker paths are not durable).
+    final preferred = effectiveSaveDirectory(saveDirectory);
 
     Object? customError;
     if (preferred != null) {

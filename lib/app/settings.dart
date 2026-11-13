@@ -1,4 +1,8 @@
+import 'dart:io';
+
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'save_directory_policy.dart';
 
 enum NetworkProtocol { udp, tcp }
 
@@ -84,8 +88,13 @@ class AppSettingsRepository {
 
   Future<AppSettings> load() async {
     final prefs = await SharedPreferences.getInstance();
+    var saveDirectory = prefs.getString(_saveDirectoryKey);
+    if (Platform.isIOS && saveDirectory != null) {
+      await prefs.remove(_saveDirectoryKey);
+      saveDirectory = null;
+    }
     return AppSettings(
-      saveDirectory: prefs.getString(_saveDirectoryKey),
+      saveDirectory: effectiveSaveDirectory(saveDirectory),
       lslEnabled: prefs.getBool(_lslEnabledKey) ?? true,
       useNetworkStream: prefs.getBool(_useNetworkStreamKey) ?? false,
       networkHost: prefs.getString(_networkHostKey) ?? AppSettings.defaultHost,
@@ -100,8 +109,9 @@ class AppSettingsRepository {
 
   Future<void> save(AppSettings settings) async {
     final prefs = await SharedPreferences.getInstance();
-    if (settings.saveDirectory != null) {
-      await prefs.setString(_saveDirectoryKey, settings.saveDirectory!);
+    final saveDirectory = effectiveSaveDirectory(settings.saveDirectory);
+    if (saveDirectory != null) {
+      await prefs.setString(_saveDirectoryKey, saveDirectory);
     } else {
       await prefs.remove(_saveDirectoryKey);
     }

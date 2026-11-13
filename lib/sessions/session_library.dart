@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../app/save_directory_policy.dart';
+
 /// One on-disk CSV recording session (`session_*` folder).
 class SessionRecord {
   const SessionRecord({
@@ -109,8 +111,7 @@ class SessionLibrary {
     if (baseDirectoryOverride != null && baseDirectoryOverride.isNotEmpty) {
       return Directory(baseDirectoryOverride);
     }
-    final preferred =
-        (saveDirectory != null && saveDirectory.isNotEmpty) ? saveDirectory : null;
+    final preferred = effectiveSaveDirectory(saveDirectory);
     if (preferred != null) {
       final dir = Directory(preferred);
       if (await dir.exists()) return dir;

@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -59,37 +61,50 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          ListTile(
-            title: const Text('Save directory'),
-            subtitle: Text(_draft.saveDirectory ?? '(app documents)'),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (_draft.saveDirectory != null)
+          if (Platform.isIOS)
+            const ListTile(
+              title: Text('Save directory'),
+              subtitle: Text(
+                'App documents (Files → On My iPhone → Flutter Emotiv Logger)',
+              ),
+            )
+          else
+            ListTile(
+              title: const Text('Save directory'),
+              subtitle: Text(_draft.saveDirectory ?? '(app documents)'),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_draft.saveDirectory != null)
+                    IconButton(
+                      tooltip: 'Use app documents',
+                      icon: const Icon(Icons.clear),
+                      onPressed: () {
+                        setState(
+                          () => _draft =
+                              _draft.copyWith(clearSaveDirectory: true),
+                        );
+                      },
+                    ),
                   IconButton(
-                    tooltip: 'Use app documents',
-                    icon: const Icon(Icons.clear),
-                    onPressed: () {
-                      setState(
-                        () => _draft = _draft.copyWith(clearSaveDirectory: true),
-                      );
-                    },
+                    tooltip: 'Pick folder',
+                    icon: const Icon(Icons.folder_open),
+                    onPressed: _pickDirectory,
                   ),
-                IconButton(
-                  tooltip: 'Pick folder',
-                  icon: const Icon(Icons.folder_open),
-                  onPressed: _pickDirectory,
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: Text(
-              'App documents is the reliable default. Custom folders often lose '
-              'permission on iOS/Android after relaunch; acquisition will fall '
-              'back automatically if a custom path is denied.',
-              style: TextStyle(fontSize: 12, color: Colors.black54),
+              Platform.isIOS
+                  ? 'Recordings always go to app documents on iOS so they stay '
+                      'writable across launches. Open them in the Files app or '
+                      'transfer from the Sessions tab.'
+                  : 'App documents is the reliable default. Custom folders often '
+                      'lose permission after relaunch; acquisition will fall '
+                      'back automatically if a custom path is denied.',
+              style: const TextStyle(fontSize: 12, color: Colors.black54),
             ),
           ),
           SwitchListTile(
