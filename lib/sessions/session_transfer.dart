@@ -7,6 +7,7 @@ import 'package:dartssh2/dartssh2.dart';
 import 'package:path/path.dart' as p;
 
 import 'server_bookmark.dart';
+import 'smb_paths.dart';
 
 class TransferProgress {
   const TransferProgress({
@@ -60,7 +61,7 @@ class SessionTransfer {
       case TransferProtocol.smb:
         final pool = await _smbPool(bookmark, password);
         try {
-          final remote = _smbRemotePath(bookmark.remotePath);
+          final remote = normalizeSmbRemotePath(bookmark.remotePath);
           if (remote.isNotEmpty) {
             await pool.mkdir(remote, recursive: true);
           }
@@ -200,7 +201,7 @@ class SessionTransfer {
   }) async {
     final pool = await _smbPool(bookmark, password);
     try {
-      final remoteRoot = _smbRemotePath(bookmark.remotePath);
+      final remoteRoot = normalizeSmbRemotePath(bookmark.remotePath);
 
       for (final sessionPath in sessionPaths) {
         _throwIfCancelled(isCancelled);
@@ -281,11 +282,37 @@ class SessionTransfer {
     );
   }
 
+  /// Lists disk shares on [host] (hides `$`-suffixed admin shares by default).
+  static Future<List<String>> listShares({
+    required String host,
+    required String password,
+    String username = '',
+    String domain = '',
+    bool includeHidden = false,
+  }) async {
+    final infos = await Smb2Pool.listSharesOn(
+      host: host.trim(),
+      user: username.isEmpty ? null : username,
+      password: password,
+      domain: domain.isEmpty ? null : domain,
+    );
+    final names = <String>[];
+    for (final info in infos) {
+      if (!info.isDisk) continue;
+      final name = normalizeSmbShare(info.name);
+      if (name.isEmpty) continue;
+      if (!includeHidden && (info.isHidden || name.endsWith(r'$'))) continue;
+      names.add(name);
+    }
+    names.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return names;
+  }
+
   static Future<Smb2Pool> _smbPool(
     ServerBookmark bookmark,
     String password,
   ) {
-    final share = bookmark.smbShare.trim();
+    final share = normalizeSmbShare(bookmark.smbShare);
     if (share.isEmpty) {
       throw ArgumentError('SMB share name is required');
     }
@@ -318,18 +345,6 @@ class SessionTransfer {
     if (s.isEmpty) return '';
     if (!s.startsWith('/')) s = '/$s';
     while (s.length > 1 && s.endsWith('/')) {
-      s = s.substring(0, s.length - 1);
-    }
-    return s;
-  }
-
-  /// SMB paths are share-relative (no leading slash).
-  static String _smbRemotePath(String path) {
-    var s = path.trim().replaceAll('\\', '/');
-    while (s.startsWith('/')) {
-      s = s.substring(1);
-    }
-    while (s.endsWith('/')) {
       s = s.substring(0, s.length - 1);
     }
     return s;

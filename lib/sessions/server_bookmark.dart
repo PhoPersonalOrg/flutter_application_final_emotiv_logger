@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'smb_paths.dart';
+
 enum TransferProtocol { sftp, smb }
 
 extension TransferProtocolX on TransferProtocol {
@@ -83,7 +85,7 @@ class ServerBookmark {
         'port': port,
         'username': username,
         'remotePath': remotePath,
-        'smbShare': smbShare,
+        'smbShare': normalizeSmbShare(smbShare),
         'domain': domain,
         'rememberPassword': rememberPassword,
       };
@@ -98,7 +100,7 @@ class ServerBookmark {
       port: (json['port'] as num?)?.toInt() ?? protocol.defaultPort,
       username: json['username'] as String? ?? '',
       remotePath: json['remotePath'] as String? ?? '',
-      smbShare: json['smbShare'] as String? ?? '',
+      smbShare: normalizeSmbShare(json['smbShare'] as String? ?? ''),
       domain: json['domain'] as String? ?? '',
       rememberPassword: json['rememberPassword'] as bool? ?? false,
     );

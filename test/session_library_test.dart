@@ -45,13 +45,14 @@ void main() {
       port: 445,
       username: 'user',
       remotePath: 'emotiv',
-      smbShare: 'data',
+      smbShare: '/data',
       domain: 'WORKGROUP',
       rememberPassword: true,
     );
 
     final encoded = ServerBookmark.encodeList([bookmark]);
     expect(encoded.contains('password'), isFalse);
+    expect(encoded.contains('"smbShare":"data"'), isTrue);
 
     final decoded = ServerBookmark.decodeList(encoded);
     expect(decoded, hasLength(1));

@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../sessions/server_bookmark.dart';
 import '../sessions/session_transfer.dart';
+import '../sessions/smb_discovery.dart';
+import '../sessions/smb_paths.dart';
 import 'providers.dart';
 
 String _newBookmarkId() {
@@ -185,6 +187,10 @@ class _BookmarkEditorPageState extends ConsumerState<BookmarkEditorPage> {
 
   ServerBookmark _draft() {
     final id = widget.existing?.id ?? _newBookmarkId();
+    final share = normalizeSmbShare(_smbShare.text);
+    if (share != _smbShare.text.trim()) {
+      _smbShare.text = share;
+    }
     return ServerBookmark(
       id: id,
       name: _name.text.trim().isEmpty ? _host.text.trim() : _name.text.trim(),
@@ -193,10 +199,122 @@ class _BookmarkEditorPageState extends ConsumerState<BookmarkEditorPage> {
       port: int.tryParse(_port.text.trim()) ?? _protocol.defaultPort,
       username: _username.text.trim(),
       remotePath: _remotePath.text.trim(),
-      smbShare: _smbShare.text.trim(),
+      smbShare: share,
       domain: _domain.text.trim(),
       rememberPassword: _rememberPassword,
     );
+  }
+
+  Future<void> _browseLan() async {
+    setState(() => _status = 'Browsing for SMB servers…');
+    try {
+      final hosts = await SmbDiscovery.browse();
+      if (!mounted) return;
+      if (hosts.isEmpty) {
+        setState(
+          () => _status =
+              'No SMB servers found. Check Local Network permission and Wi‑Fi.',
+        );
+        return;
+      }
+      final chosen = await showModalBottomSheet<DiscoveredSmbHost>(
+        context: context,
+        showDragHandle: true,
+        builder: (ctx) {
+          return SafeArea(
+            child: ListView(
+              shrinkWrap: true,
+              children: [
+                const ListTile(
+                  title: Text('SMB servers on LAN'),
+                  subtitle: Text('Tap to fill host / port'),
+                ),
+                for (final h in hosts)
+                  ListTile(
+                    leading: const Icon(Icons.storage),
+                    title: Text(h.displayName),
+                    subtitle: Text('${h.host}:${h.port}'),
+                    onTap: () => Navigator.pop(ctx, h),
+                  ),
+              ],
+            ),
+          );
+        },
+      );
+      if (!mounted) return;
+      if (chosen == null) {
+        setState(() => _status = null);
+        return;
+      }
+      setState(() {
+        _host.text = chosen.host;
+        _port.text = '${chosen.port}';
+        if (_name.text.trim().isEmpty) {
+          _name.text = chosen.displayName;
+        }
+        _status = 'Selected ${chosen.host}';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _status = 'Browse failed: $e');
+    }
+  }
+
+  Future<void> _listShares() async {
+    final host = _host.text.trim();
+    if (host.isEmpty) {
+      setState(() => _status = 'Enter or browse a host first');
+      return;
+    }
+    setState(() => _status = 'Listing shares on $host…');
+    try {
+      final shares = await SessionTransfer.listShares(
+        host: host,
+        password: _password.text,
+        username: _username.text.trim(),
+        domain: _domain.text.trim(),
+      );
+      if (!mounted) return;
+      if (shares.isEmpty) {
+        setState(() => _status = 'No disk shares found (check credentials)');
+        return;
+      }
+      final chosen = await showModalBottomSheet<String>(
+        context: context,
+        showDragHandle: true,
+        builder: (ctx) {
+          return SafeArea(
+            child: ListView(
+              shrinkWrap: true,
+              children: [
+                ListTile(
+                  title: const Text('SMB shares'),
+                  subtitle: Text(host),
+                ),
+                for (final name in shares)
+                  ListTile(
+                    leading: const Icon(Icons.folder),
+                    title: Text(name),
+                    onTap: () => Navigator.pop(ctx, name),
+                  ),
+              ],
+            ),
+          );
+        },
+      );
+      if (!mounted) return;
+      if (chosen == null) {
+        setState(() => _status = null);
+        return;
+      }
+      setState(() {
+        _smbShare.text = normalizeSmbShare(chosen);
+        _status = 'Share “${_smbShare.text}” selected';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _status = 'List shares failed: $e');
+    }
   }
 
   Future<void> _test() async {
@@ -296,13 +414,31 @@ class _BookmarkEditorPageState extends ConsumerState<BookmarkEditorPage> {
             const SizedBox(height: 12),
             TextFormField(
               controller: _host,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'Host',
-                border: OutlineInputBorder(),
+                border: const OutlineInputBorder(),
+                suffixIcon: _protocol == TransferProtocol.smb
+                    ? IconButton(
+                        tooltip: 'Browse LAN',
+                        icon: const Icon(Icons.radar),
+                        onPressed: _browseLan,
+                      )
+                    : null,
               ),
               validator: (v) =>
                   (v == null || v.trim().isEmpty) ? 'Required' : null,
             ),
+            if (_protocol == TransferProtocol.smb) ...[
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: _browseLan,
+                  icon: const Icon(Icons.radar),
+                  label: const Text('Browse LAN for SMB'),
+                ),
+              ),
+            ],
             const SizedBox(height: 12),
             TextFormField(
               controller: _port,
@@ -344,15 +480,32 @@ class _BookmarkEditorPageState extends ConsumerState<BookmarkEditorPage> {
             if (_protocol == TransferProtocol.smb) ...[
               TextFormField(
                 controller: _smbShare,
-                decoration: const InputDecoration(
+                decoration: InputDecoration(
                   labelText: 'SMB share',
-                  border: OutlineInputBorder(),
+                  hintText: 'h  (no leading /)',
+                  border: const OutlineInputBorder(),
+                  suffixIcon: IconButton(
+                    tooltip: 'List shares',
+                    icon: const Icon(Icons.folder_open),
+                    onPressed: _listShares,
+                  ),
                 ),
                 validator: (v) {
                   if (_protocol != TransferProtocol.smb) return null;
-                  if (v == null || v.trim().isEmpty) return 'Required for SMB';
+                  if (normalizeSmbShare(v ?? '').isEmpty) {
+                    return 'Required for SMB';
+                  }
                   return null;
                 },
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: _listShares,
+                  icon: const Icon(Icons.folder_open),
+                  label: const Text('List shares on host'),
+                ),
               ),
               const SizedBox(height: 12),
               TextFormField(

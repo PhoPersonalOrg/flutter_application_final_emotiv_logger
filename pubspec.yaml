@@ -44,6 +44,7 @@ dependencies:
   lsl_flutter: ^0.0.6
   flutter_riverpod: ^3.5.0
   riverpod: ^3.5.0
+  nsd: ^5.0.1
 
 dev_dependencies:
   flutter_test:
