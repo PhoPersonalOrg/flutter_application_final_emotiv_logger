@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../acquisition/acquisition_session.dart';
 import '../domain/acquisition_state.dart';
 import '../sessions/bookmark_store.dart';
+import '../sessions/dropbox_sync.dart';
 import '../sessions/server_bookmark.dart';
 import '../sessions/session_library.dart';
 import 'settings.dart';
@@ -38,9 +39,18 @@ class SettingsNotifier extends Notifier<AppSettings> {
   }
 }
 
+final dropboxSyncProvider = Provider<DropboxSync>((ref) {
+  return DropboxSync();
+});
+
+final dropboxLinkedProvider = FutureProvider<bool>((ref) async {
+  return ref.watch(dropboxSyncProvider).isLinked();
+});
+
 final acquisitionSessionProvider = Provider<AcquisitionSession>((ref) {
   final session = AcquisitionSession(
     initialSettings: ref.read(settingsProvider),
+    dropboxSync: ref.read(dropboxSyncProvider),
     persistSettings: (settings) async {
       await ref.read(settingsRepositoryProvider).save(settings);
       ref.read(settingsProvider.notifier).applyLocal(settings);

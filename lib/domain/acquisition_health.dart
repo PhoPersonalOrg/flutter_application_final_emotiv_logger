@@ -21,6 +21,7 @@ class AcquisitionHealth {
     this.networkEnabled = false,
     this.networkConnected = false,
     this.networkMessage,
+    this.dropboxMessage,
   });
 
   final int eegPackets;
@@ -46,6 +47,9 @@ class AcquisitionHealth {
   final bool networkConnected;
   final String? networkMessage;
 
+  /// Last Dropbox auto-upload status (success or error).
+  final String? dropboxMessage;
+
   bool get isLslHealthy => lslStatus == LslSubsystemStatus.active;
 
   AcquisitionHealth copyWith({
@@ -70,6 +74,8 @@ class AcquisitionHealth {
     bool? networkEnabled,
     bool? networkConnected,
     String? networkMessage,
+    String? dropboxMessage,
+    bool clearDropboxMessage = false,
   }) {
     return AcquisitionHealth(
       eegPackets: eegPackets ?? this.eegPackets,
@@ -94,6 +100,9 @@ class AcquisitionHealth {
       networkEnabled: networkEnabled ?? this.networkEnabled,
       networkConnected: networkConnected ?? this.networkConnected,
       networkMessage: networkMessage ?? this.networkMessage,
+      dropboxMessage: clearDropboxMessage
+          ? null
+          : (dropboxMessage ?? this.dropboxMessage),
     );
   }
 }

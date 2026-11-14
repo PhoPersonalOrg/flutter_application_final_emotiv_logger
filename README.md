@@ -32,7 +32,30 @@ Timestamps are receive-time (headset clock is not available on this BLE path).
 
 ## Sessions tab (transfer)
 
-Bottom nav **Sessions** lists prior `session_*` folders. Multi-select and transfer over **SFTP** (`dartssh2`) or **SMB** (`dart_smb2`) to a remembered server bookmark (host/user/path in SharedPreferences; optional password in secure storage). The live recording folder is not transferable/deletable while acquisition is open. SFTP over Tailscale is the usual path; SMB on LAN may need Local Network permission on iOS.
+Bottom nav **Sessions** lists prior `session_*` folders. Multi-select and transfer over **SFTP** (`dartssh2`), **SMB** (`dart_smb2`), or **Dropbox** (App Folder) to a remembered destination. Server bookmarks store host/user/path in SharedPreferences (optional password in secure storage). The live recording folder is not transferable/deletable while acquisition is open. SFTP over Tailscale is the usual path; SMB on LAN may need Local Network permission on iOS.
+
+### Dropbox sync
+
+Uploads go into the Dropbox **App Folder** (not full Dropbox access). Settings → **Connect Dropbox**, optional **Auto-upload after Stop**, and a folder name under the App Folder (default `EmotivSessions`). Sessions → select → Transfer can also target Dropbox.
+
+1. Create an app at https://www.dropbox.com/developers/apps  
+   - Scoped access · **App folder** · name e.g. `Emotiv Logger`
+2. Permissions: `files.content.write`, `files.content.read`, `files.metadata.write`, `files.metadata.read`
+3. Copy the **App key**
+4. Replace `YOUR_DROPBOX_APP_KEY` in:
+   - [`ios/Runner/Info.plist`](ios/Runner/Info.plist) (`db-YOUR_DROPBOX_APP_KEY`)
+   - [`android/app/src/main/AndroidManifest.xml`](android/app/src/main/AndroidManifest.xml) (`db-YOUR_DROPBOX_APP_KEY`)
+5. Run with the same key:
+
+```bash
+fvm flutter run \
+  --dart-define=DROPBOX_APP_KEY=<key> \
+  --dart-define=DROPBOX_CLIENT_ID=emotiv-logger
+```
+
+PKCE is used; do **not** embed an app secret in the client.
+
+On iOS, OAuth returns via the `db-<key>://` URL scheme. The app disables Flutter deep linking for those URLs and handles them in `DropboxFlutterSceneDelegate` / `AppDelegate` so Dropbox can finish PKCE. After tapping Connect, keep the app open until authorization completes (the UI polls for credentials).
 
 ## Decoding
 
@@ -84,6 +107,8 @@ Use the status-bar Flutter device picker for the target, then:
 
 ```bash
 fvm flutter run
+# with Dropbox (after creating an App Folder app — see above):
+fvm flutter run --dart-define=DROPBOX_APP_KEY=<key>
 # Pixel 2 example:
 fvm flutter run -d FA7B71A02109
 # or workspace Action Buttons: Run Device / Debug Device / Build iOS

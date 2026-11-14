@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../sessions/dropbox_config.dart';
 import '../sessions/server_bookmark.dart';
 import '../sessions/session_library.dart';
 import '../sessions/session_transfer.dart';
 import 'bookmarks_page.dart';
 import 'providers.dart';
+import 'settings_page.dart';
 
 String _formatStarted(DateTime? dt) {
   if (dt == null) return 'Unknown time';
@@ -15,7 +17,7 @@ String _formatStarted(DateTime? dt) {
       '${two(l.hour)}:${two(l.minute)}';
 }
 
-/// Lists prior CSV sessions and transfers them via SFTP/SMB bookmarks.
+/// Lists prior CSV sessions and transfers them via SFTP/SMB/Dropbox.
 class SessionsPage extends ConsumerStatefulWidget {
   const SessionsPage({super.key});
 
@@ -248,39 +250,51 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
     if (paths.isEmpty) return;
 
     final bookmarkState = await ref.read(bookmarkStoreProvider.future);
+    final dropboxLinked = await ref.read(dropboxSyncProvider).isLinked();
     if (!mounted) return;
 
-    if (bookmarkState.bookmarks.isEmpty) {
-      final go = await showDialog<bool>(
+    final hasBookmarks = bookmarkState.bookmarks.isNotEmpty;
+    if (!hasBookmarks && !dropboxLinked) {
+      final action = await showDialog<String>(
         context: context,
         builder: (ctx) => AlertDialog(
-          title: const Text('No server bookmarks'),
+          title: const Text('No transfer destinations'),
           content: const Text(
-            'Add an SFTP or SMB bookmark before transferring.',
+            'Connect Dropbox in Settings or add an SFTP/SMB bookmark.',
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
+              onPressed: () => Navigator.pop(ctx),
               child: const Text('Cancel'),
             ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 'settings'),
+              child: const Text('Settings'),
+            ),
             FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
+              onPressed: () => Navigator.pop(ctx, 'bookmark'),
               child: const Text('Add bookmark'),
             ),
           ],
         ),
       );
-      if (go == true && mounted) {
+      if (!mounted) return;
+      if (action == 'bookmark') {
         await Navigator.of(context).push(
           MaterialPageRoute<void>(builder: (_) => const BookmarksPage()),
+        );
+      } else if (action == 'settings') {
+        await Navigator.of(context).push(
+          MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
         );
       }
       return;
     }
 
-    var chosen = bookmarkState.lastUsed ?? bookmarkState.bookmarks.first;
+    ServerBookmark? chosen =
+        hasBookmarks ? (bookmarkState.lastUsed ?? bookmarkState.bookmarks.first) : null;
     var password = '';
-    if (chosen.rememberPassword) {
+    if (chosen != null && chosen.rememberPassword) {
       password = await ref
               .read(bookmarkStoreProvider.notifier)
               .readPassword(chosen.id) ??
@@ -292,22 +306,118 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
       context: context,
       builder: (ctx) => _TransferConfirmDialog(
         bookmarks: bookmarkState.bookmarks,
-        initial: chosen,
+        initialBookmark: chosen,
         initialPassword: password,
+        dropboxLinked: dropboxLinked,
+        preferDropbox: dropboxLinked && !hasBookmarks,
         sessionCount: paths.length,
       ),
     );
     if (result == null || !mounted) return;
 
-    await ref
-        .read(bookmarkStoreProvider.notifier)
-        .setLastUsed(result.bookmark.id);
+    if (result.useDropbox) {
+      await _runDropboxTransfer(sessionPaths: paths);
+      return;
+    }
+
+    final bookmark = result.bookmark!;
+    await ref.read(bookmarkStoreProvider.notifier).setLastUsed(bookmark.id);
     await _runTransfer(
-      bookmark: result.bookmark,
+      bookmark: bookmark,
       password: result.password,
       sessionPaths: paths,
       rememberPassword: result.rememberPassword,
     );
+  }
+
+  Future<void> _runDropboxTransfer({required List<String> sessionPaths}) async {
+    var cancelled = false;
+    final progress = ValueNotifier<TransferProgress?>(null);
+    final remoteRoot = ref.read(settingsProvider).dropboxRemoteRoot;
+
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return ValueListenableBuilder<TransferProgress?>(
+          valueListenable: progress,
+          builder: (ctx, p, _) {
+            return AlertDialog(
+              title: const Text('Uploading to Dropbox'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (p == null)
+                    const Text('Connecting…')
+                  else ...[
+                    Text(p.sessionFolder),
+                    Text(
+                      p.fileName.isEmpty
+                          ? 'Finishing…'
+                          : '${p.fileName} (${p.fileIndex}/${p.fileCount})',
+                    ),
+                    const SizedBox(height: 12),
+                    LinearProgressIndicator(
+                      value: p.bytesTotal > 0 ? p.fraction : null,
+                    ),
+                  ],
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => cancelled = true,
+                  child: const Text('Cancel'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    String? error;
+    try {
+      if (!DropboxConfig.isConfigured) {
+        throw StateError('Dropbox app key not configured (see README)');
+      }
+      await ref.read(dropboxSyncProvider).uploadSessions(
+            sessionPaths,
+            remoteRoot: remoteRoot,
+            isCancelled: () => cancelled,
+            onProgress: (p) => progress.value = p,
+          );
+    } on TransferCancelled {
+      error = 'Cancelled';
+    } catch (e) {
+      error = '$e';
+    }
+
+    progress.dispose();
+    if (mounted && Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+    if (!mounted) return;
+
+    if (error == null && !cancelled) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Uploaded ${sessionPaths.length} session'
+            '${sessionPaths.length == 1 ? '' : 's'} to Dropbox',
+          ),
+        ),
+      );
+      setState(() {
+        _selected.clear();
+        _selectMode = false;
+      });
+    } else if (error != null && error != 'Cancelled') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Dropbox upload failed: $error')),
+      );
+    }
   }
 
   Future<void> _runTransfer({
@@ -411,13 +521,20 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
 }
 
 class _TransferDialogResult {
-  const _TransferDialogResult({
+  const _TransferDialogResult.bookmark({
     required this.bookmark,
     required this.password,
     required this.rememberPassword,
-  });
+  }) : useDropbox = false;
 
-  final ServerBookmark bookmark;
+  const _TransferDialogResult.dropbox()
+      : useDropbox = true,
+        bookmark = null,
+        password = '',
+        rememberPassword = false;
+
+  final bool useDropbox;
+  final ServerBookmark? bookmark;
   final String password;
   final bool rememberPassword;
 }
@@ -425,14 +542,18 @@ class _TransferDialogResult {
 class _TransferConfirmDialog extends StatefulWidget {
   const _TransferConfirmDialog({
     required this.bookmarks,
-    required this.initial,
+    required this.initialBookmark,
     required this.initialPassword,
+    required this.dropboxLinked,
+    required this.preferDropbox,
     required this.sessionCount,
   });
 
   final List<ServerBookmark> bookmarks;
-  final ServerBookmark initial;
+  final ServerBookmark? initialBookmark;
   final String initialPassword;
+  final bool dropboxLinked;
+  final bool preferDropbox;
   final int sessionCount;
 
   @override
@@ -440,16 +561,25 @@ class _TransferConfirmDialog extends StatefulWidget {
 }
 
 class _TransferConfirmDialogState extends State<_TransferConfirmDialog> {
-  late ServerBookmark _bookmark;
+  static const _dropboxId = '__dropbox__';
+
+  late String _destinationId;
+  ServerBookmark? _bookmark;
   late final TextEditingController _password;
   late bool _remember;
 
   @override
   void initState() {
     super.initState();
-    _bookmark = widget.initial;
+    if (widget.preferDropbox && widget.dropboxLinked) {
+      _destinationId = _dropboxId;
+      _bookmark = widget.initialBookmark;
+    } else {
+      _bookmark = widget.initialBookmark ?? widget.bookmarks.first;
+      _destinationId = _bookmark!.id;
+    }
     _password = TextEditingController(text: widget.initialPassword);
-    _remember = _bookmark.rememberPassword;
+    _remember = _bookmark?.rememberPassword ?? false;
   }
 
   @override
@@ -460,6 +590,7 @@ class _TransferConfirmDialogState extends State<_TransferConfirmDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final useDropbox = _destinationId == _dropboxId;
     return AlertDialog(
       title: Text(
         'Transfer ${widget.sessionCount} session'
@@ -469,12 +600,17 @@ class _TransferConfirmDialogState extends State<_TransferConfirmDialog> {
         mainAxisSize: MainAxisSize.min,
         children: [
           DropdownButtonFormField<String>(
-            initialValue: _bookmark.id,
+            initialValue: _destinationId,
             decoration: const InputDecoration(
-              labelText: 'Bookmark',
+              labelText: 'Destination',
               border: OutlineInputBorder(),
             ),
             items: [
+              if (widget.dropboxLinked)
+                const DropdownMenuItem(
+                  value: _dropboxId,
+                  child: Text('Dropbox (App Folder)'),
+                ),
               for (final b in widget.bookmarks)
                 DropdownMenuItem(
                   value: b.id,
@@ -483,28 +619,39 @@ class _TransferConfirmDialogState extends State<_TransferConfirmDialog> {
             ],
             onChanged: (id) {
               if (id == null) return;
-              final next = widget.bookmarks.firstWhere((b) => b.id == id);
               setState(() {
-                _bookmark = next;
-                _remember = next.rememberPassword;
+                _destinationId = id;
+                if (id != _dropboxId) {
+                  _bookmark = widget.bookmarks.firstWhere((b) => b.id == id);
+                  _remember = _bookmark!.rememberPassword;
+                }
               });
             },
           ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _password,
-            obscureText: true,
-            decoration: const InputDecoration(
-              labelText: 'Password',
-              border: OutlineInputBorder(),
+          if (!useDropbox) ...[
+            const SizedBox(height: 12),
+            TextField(
+              controller: _password,
+              obscureText: true,
+              decoration: const InputDecoration(
+                labelText: 'Password',
+                border: OutlineInputBorder(),
+              ),
             ),
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Remember password'),
-            value: _remember,
-            onChanged: (v) => setState(() => _remember = v),
-          ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Remember password'),
+              value: _remember,
+              onChanged: (v) => setState(() => _remember = v),
+            ),
+          ] else
+            const Padding(
+              padding: EdgeInsets.only(top: 12),
+              child: Text(
+                'Uploads into your Dropbox App Folder (see Settings for path).',
+                style: TextStyle(fontSize: 12, color: Colors.black54),
+              ),
+            ),
         ],
       ),
       actions: [
@@ -514,10 +661,14 @@ class _TransferConfirmDialogState extends State<_TransferConfirmDialog> {
         ),
         FilledButton(
           onPressed: () {
+            if (useDropbox) {
+              Navigator.pop(context, const _TransferDialogResult.dropbox());
+              return;
+            }
             Navigator.pop(
               context,
-              _TransferDialogResult(
-                bookmark: _bookmark.copyWith(rememberPassword: _remember),
+              _TransferDialogResult.bookmark(
+                bookmark: _bookmark!.copyWith(rememberPassword: _remember),
                 password: _password.text,
                 rememberPassword: _remember,
               ),

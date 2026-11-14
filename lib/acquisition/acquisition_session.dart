@@ -13,6 +13,7 @@ import '../domain/acquisition_health.dart';
 import '../domain/acquisition_state.dart';
 import '../domain/ble_uuids.dart';
 import '../domain/samples.dart';
+import '../sessions/dropbox_sync.dart';
 import '../sinks/csv_sink.dart';
 import '../sinks/lsl_sink.dart';
 import '../sinks/network_sink.dart';
@@ -24,8 +25,10 @@ class AcquisitionSession {
   AcquisitionSession({
     AppSettings? initialSettings,
     Future<void> Function(AppSettings settings)? persistSettings,
+    DropboxSync? dropboxSync,
   })  : _settings = initialSettings ?? const AppSettings(),
-        _persistSettings = persistSettings {
+        _persistSettings = persistSettings,
+        _dropbox = dropboxSync ?? DropboxSync() {
     _preferredId = _settings.preferredDeviceId;
     _preferredName = _settings.preferredDeviceName;
     _hub = SampleHub(onHealth: _mutateHealth);
@@ -36,6 +39,7 @@ class AcquisitionSession {
   }
 
   final Future<void> Function(AppSettings settings)? _persistSettings;
+  final DropboxSync _dropbox;
 
   final _stateController =
       StreamController<AcquisitionState>.broadcast(sync: true);
@@ -779,6 +783,10 @@ class AcquisitionSession {
       _emit(AcquisitionStopping(deviceName: name, health: _health));
     }
 
+    final sessionPath = _csv.sessionPath ?? _health.csvSessionPath;
+    final shouldAutoUploadDropbox =
+        disconnectBle && _userStopRequested && _settings.dropboxAutoUpload;
+
     _acceptPackets = false;
     _rateTimer?.cancel();
     _rateTimer = null;
@@ -804,6 +812,35 @@ class AcquisitionSession {
         await _device?.disconnect();
       } catch (_) {}
       _device = null;
+    }
+
+    if (shouldAutoUploadDropbox) {
+      unawaited(_autoUploadDropbox(sessionPath));
+    }
+  }
+
+  Future<void> _autoUploadDropbox(String? sessionPath) async {
+    _mutateHealth(
+      (h) => h.copyWith(dropboxMessage: 'Dropbox: uploading…'),
+    );
+    if (_state is AcquisitionIdle) {
+      _emit(AcquisitionIdle(health: _health));
+    }
+
+    final ok = await _dropbox.tryAutoUpload(
+      sessionPath,
+      enabled: true,
+      remoteRoot: _settings.dropboxRemoteRoot,
+    );
+    _mutateHealth(
+      (h) => h.copyWith(
+        dropboxMessage: ok
+            ? 'Dropbox: uploaded'
+            : 'Dropbox: ${_dropbox.lastError ?? 'upload failed'}',
+      ),
+    );
+    if (_state is AcquisitionIdle) {
+      _emit(AcquisitionIdle(health: _health));
     }
   }
 

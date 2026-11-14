@@ -1,22 +1,35 @@
 PODS:
+  - dropbox_client (1.2.0):
+    - Flutter
+    - ObjectiveDropboxOfficial (~> 7.4)
   - Flutter (1.0.0)
   - lsl_bindings (0.0.1):
     - Flutter
+  - ObjectiveDropboxOfficial (7.4.2)
 
 DEPENDENCIES:
+  - dropbox_client (from `.symlinks/plugins/dropbox_client/ios`)
   - Flutter (from `Flutter`)
   - lsl_bindings (from `.symlinks/plugins/lsl_bindings/ios`)
 
+SPEC REPOS:
+  trunk:
+    - ObjectiveDropboxOfficial
+
 EXTERNAL SOURCES:
+  dropbox_client:
+    :path: ".symlinks/plugins/dropbox_client/ios"
   Flutter:
     :path: Flutter
   lsl_bindings:
     :path: ".symlinks/plugins/lsl_bindings/ios"
 
 SPEC CHECKSUMS:
+  dropbox_client: b72ab03b8a1a963673a98f4f235b8a265a1d83d4
   Flutter: 71a624a5bc0c04062bf19101d501e466baf2fb47
   lsl_bindings: 570e4de9c20911992f8515407a92a53af00f542f
+  ObjectiveDropboxOfficial: 1645cbc5a542831173425b00ed6929d5a07d0a95
 
-PODFILE CHECKSUM: bdd3ac45cf87e9f5836074c949be039caaf23d83
+PODFILE CHECKSUM: a5527e3b8d6828fde86d575f73fe87cd4e006733
 
 COCOAPODS: 1.16.2

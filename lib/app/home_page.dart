@@ -254,6 +254,13 @@ class _HealthCard extends StatelessWidget {
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
+            if (health.dropboxMessage != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                health.dropboxMessage!,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
           ],
         ),
       ),

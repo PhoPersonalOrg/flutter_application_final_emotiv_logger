@@ -45,6 +45,7 @@ dependencies:
   flutter_riverpod: ^3.5.0
   riverpod: ^3.5.0
   nsd: ^5.0.1
+  dropbox_client: ^1.2.2
 
 dev_dependencies:
   flutter_test:

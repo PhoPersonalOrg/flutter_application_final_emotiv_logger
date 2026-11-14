@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app/root_shell.dart';
+import 'sessions/dropbox_sync.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await DropboxSync.initIfConfigured();
   runApp(const ProviderScope(child: EmotivAcquisitionApp()));
 }
 
