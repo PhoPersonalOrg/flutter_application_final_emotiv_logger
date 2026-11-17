@@ -19,7 +19,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 version: 1.0.1+1
 
 environment:
-  sdk: ^3.8.1
+  sdk: ^3.10.0
 
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions
@@ -32,17 +32,20 @@ dependencies:
     sdk: flutter
   encrypt: ^5.0.3
   flutter_blue_plus: ^2.0.0
-  permission_handler: ^12.0.1
+  permission_handler: ^13.0.2
   path_provider: ^2.1.5
-  file_picker: ^10.2.0
-  device_info_plus: ^12.1.0
+  file_picker: ^13.3.3
+  device_info_plus: ^13.3.0
   shared_preferences: ^2.5.3
+  flutter_secure_storage: ^11.2.0
+  path: ^1.9.1
+  dartssh2: ^4.1.0
+  dart_smb2: ^0.3.0
   lsl_flutter: ^0.0.6
-  carp_multicast_lock: ^0.0.4
-
-  # liblsl: ^0.5.1
-
-
+  flutter_riverpod: ^3.5.0
+  riverpod: ^3.5.0
+  nsd: ^5.0.1
+  dropbox_client: ^1.2.2
 
 dev_dependencies:
   flutter_test:
@@ -65,6 +68,8 @@ flutter:
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in
   # the material Icons class.
+  assets:
+    - shorebird.yaml
   uses-material-design: true
 
   # To add assets to your application, add an assets section, like this:
@@ -97,3 +102,9 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+# encrypt 5.x pins pointycastle ^3; dartssh2 4 needs ^4. Override is safe for
+# our AES-ECB usage in CryptoCodec.
+dependency_overrides:
+  pointycastle: ^4.0.0
+

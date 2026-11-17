@@ -27,7 +27,11 @@
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>This app needs Bluetooth access to connect to Emotiv EEG devices</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>This app needs local network access to discover data streams.</string>
+	<string>This app needs local network access to discover SMB servers for session transfer and data streams.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_smb._tcp</string>
+	</array>
 	<key>NSHumanReadableCopyright</key>
 	<string>$(PRODUCT_COPYRIGHT)</string>
 	<key>NSMainNibFile</key>
