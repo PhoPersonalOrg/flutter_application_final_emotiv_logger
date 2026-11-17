@@ -1,0 +1,194 @@
+import 'acquisition_health.dart';
+
+/// Explicit BLE acquisition lifecycle. Single transition owner owns mutations.
+sealed class AcquisitionState {
+  const AcquisitionState();
+
+  String get label;
+  AcquisitionHealth get health;
+
+  /// Session folder that is still being written (or flushed), if any.
+  ///
+  /// Idle / Failed / Scanning / etc. keep [AcquisitionHealth.csvSessionPath] as
+  /// the last path for Record-tab display, but must not block Sessions upload.
+  String? get activeCsvSessionPath => switch (this) {
+        AcquisitionPreparing() ||
+        AcquisitionStreaming() ||
+        AcquisitionStopping() =>
+          health.csvSessionPath,
+        _ => null,
+      };
+}
+
+class AcquisitionIdle extends AcquisitionState {
+  const AcquisitionIdle({this.health = const AcquisitionHealth()});
+
+  @override
+  final AcquisitionHealth health;
+
+  @override
+  String get label => 'Idle';
+}
+
+class AcquisitionScanning extends AcquisitionState {
+  const AcquisitionScanning({
+    required this.devices,
+    this.active = true,
+    this.preferredId,
+    this.health = const AcquisitionHealth(),
+  });
+
+  final List<DiscoveredDevice> devices;
+
+  /// True while the BLE radio scan is running; false after timeout/stop so
+  /// the device list remains visible for connect.
+  final bool active;
+
+  /// Last successfully used device id, if any (for UI highlight).
+  final String? preferredId;
+
+  @override
+  final AcquisitionHealth health;
+
+  @override
+  String get label => active ? 'Scanning' : 'Devices found';
+
+  AcquisitionScanning copyWith({
+    List<DiscoveredDevice>? devices,
+    bool? active,
+    String? preferredId,
+    AcquisitionHealth? health,
+  }) {
+    return AcquisitionScanning(
+      devices: devices ?? this.devices,
+      active: active ?? this.active,
+      preferredId: preferredId ?? this.preferredId,
+      health: health ?? this.health,
+    );
+  }
+}
+
+class AcquisitionConnecting extends AcquisitionState {
+  const AcquisitionConnecting({
+    required this.deviceName,
+    this.health = const AcquisitionHealth(),
+  });
+
+  final String deviceName;
+
+  @override
+  final AcquisitionHealth health;
+
+  @override
+  String get label => 'Connecting';
+}
+
+class AcquisitionPreparing extends AcquisitionState {
+  const AcquisitionPreparing({
+    required this.deviceName,
+    required this.sessionDir,
+    this.health = const AcquisitionHealth(),
+  });
+
+  final String deviceName;
+  final String sessionDir;
+
+  @override
+  final AcquisitionHealth health;
+
+  @override
+  String get label => 'Preparing';
+}
+
+class AcquisitionStreaming extends AcquisitionState {
+  const AcquisitionStreaming({
+    required this.deviceName,
+    required this.sessionDir,
+    required this.health,
+  });
+
+  final String deviceName;
+  final String sessionDir;
+
+  @override
+  final AcquisitionHealth health;
+
+  @override
+  String get label => 'Streaming';
+
+  AcquisitionStreaming copyWith({AcquisitionHealth? health}) {
+    return AcquisitionStreaming(
+      deviceName: deviceName,
+      sessionDir: sessionDir,
+      health: health ?? this.health,
+    );
+  }
+}
+
+class AcquisitionReconnecting extends AcquisitionState {
+  const AcquisitionReconnecting({
+    required this.deviceName,
+    required this.attempt,
+    required this.nextRetryIn,
+    required this.health,
+  });
+
+  final String deviceName;
+  final int attempt;
+  final Duration nextRetryIn;
+
+  @override
+  final AcquisitionHealth health;
+
+  @override
+  String get label => 'Reconnecting';
+}
+
+class AcquisitionStopping extends AcquisitionState {
+  const AcquisitionStopping({
+    required this.deviceName,
+    this.health = const AcquisitionHealth(),
+  });
+
+  final String deviceName;
+
+  @override
+  final AcquisitionHealth health;
+
+  @override
+  String get label => 'Stopping';
+}
+
+class AcquisitionFailed extends AcquisitionState {
+  const AcquisitionFailed({
+    required this.message,
+    this.health = const AcquisitionHealth(),
+  });
+
+  final String message;
+
+  @override
+  final AcquisitionHealth health;
+
+  @override
+  String get label => 'Failed';
+}
+
+class DiscoveredDevice {
+  const DiscoveredDevice({
+    required this.id,
+    required this.name,
+    this.rssi,
+    this.serialHex,
+    this.isPreferred = false,
+  });
+
+  final String id;
+  final String name;
+  final int? rssi;
+
+  /// Parsed advertising serial when the name matches Emotiv patterns.
+  final String? serialHex;
+
+  final bool isPreferred;
+}

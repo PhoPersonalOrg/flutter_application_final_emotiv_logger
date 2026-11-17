@@ -1,28 +1,35 @@
 PODS:
+  - dropbox_client (1.2.0):
+    - Flutter
+    - ObjectiveDropboxOfficial (~> 7.4)
   - Flutter (1.0.0)
   - lsl_bindings (0.0.1):
     - Flutter
-  - permission_handler_apple (9.3.0):
-    - Flutter
+  - ObjectiveDropboxOfficial (7.4.2)
 
 DEPENDENCIES:
+  - dropbox_client (from `.symlinks/plugins/dropbox_client/ios`)
   - Flutter (from `Flutter`)
   - lsl_bindings (from `.symlinks/plugins/lsl_bindings/ios`)
-  - permission_handler_apple (from `.symlinks/plugins/permission_handler_apple/ios`)
+
+SPEC REPOS:
+  trunk:
+    - ObjectiveDropboxOfficial
 
 EXTERNAL SOURCES:
+  dropbox_client:
+    :path: ".symlinks/plugins/dropbox_client/ios"
   Flutter:
     :path: Flutter
   lsl_bindings:
     :path: ".symlinks/plugins/lsl_bindings/ios"
-  permission_handler_apple:
-    :path: ".symlinks/plugins/permission_handler_apple/ios"
 
 SPEC CHECKSUMS:
-  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  dropbox_client: b72ab03b8a1a963673a98f4f235b8a265a1d83d4
+  Flutter: 71a624a5bc0c04062bf19101d501e466baf2fb47
   lsl_bindings: 570e4de9c20911992f8515407a92a53af00f542f
-  permission_handler_apple: 4ed2196e43d0651e8ff7ca3483a069d469701f2d
+  ObjectiveDropboxOfficial: 1645cbc5a542831173425b00ed6929d5a07d0a95
 
-PODFILE CHECKSUM: e30f02f9d1c72c47bb6344a0a748c9d268180865
+PODFILE CHECKSUM: a5527e3b8d6828fde86d575f73fe87cd4e006733
 
 COCOAPODS: 1.16.2

@@ -62,8 +62,9 @@ class DirectoryHelper {
 	return true;
   }
   
-  /// Let user select a directory
+  /// Let user select a directory. Always null on iOS (Documents-only).
   static Future<String?> selectDirectory() async {
+	if (Platform.isIOS) return null;
 	try {
 	  final String? selectedDirectory = await FilePicker.getDirectoryPath();
 	  return selectedDirectory;
