@@ -16,6 +16,7 @@ class SettingsPage extends ConsumerStatefulWidget {
 }
 
 class _SettingsPageState extends ConsumerState<SettingsPage> {
+  late TextEditingController _hostname;
   late TextEditingController _host;
   late TextEditingController _port;
   late TextEditingController _dropboxRoot;
@@ -27,6 +28,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   void initState() {
     super.initState();
     _draft = ref.read(settingsProvider);
+    _hostname = TextEditingController(text: _draft.hostname);
     _host = TextEditingController(text: _draft.networkHost);
     _port = TextEditingController(text: '${_draft.networkPort}');
     _dropboxRoot = TextEditingController(text: _draft.dropboxRemoteRoot);
@@ -35,6 +37,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   @override
   void dispose() {
+    _hostname.dispose();
     _host.dispose();
     _port.dispose();
     _dropboxRoot.dispose();
@@ -105,7 +108,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     final root = _dropboxRoot.text.trim().isEmpty
         ? AppSettings.defaultDropboxRemoteRoot
         : _dropboxRoot.text.trim();
+    final hostname = _hostname.text.trim().isEmpty
+        ? AppSettings.defaultHostname
+        : _hostname.text.trim();
     final next = _draft.copyWith(
+      hostname: hostname,
       networkHost: _host.text.trim().isEmpty
           ? AppSettings.defaultHost
           : _host.text.trim(),
@@ -178,6 +185,15 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             value: _draft.lslEnabled,
             onChanged: (v) =>
                 setState(() => _draft = _draft.copyWith(lslEnabled: v)),
+          ),
+          TextField(
+            controller: _hostname,
+            decoration: const InputDecoration(
+              labelText: 'Hostname',
+              hintText: AppSettings.defaultHostname,
+              helperText: 'Shown as the LSL stream source host on the LAN',
+            ),
+            enabled: _draft.lslEnabled,
           ),
           const Divider(),
           const ListTile(

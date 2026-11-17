@@ -22,6 +22,7 @@ class AppSettings {
   const AppSettings({
     this.saveDirectory,
     this.lslEnabled = true,
+    this.hostname = defaultHostname,
     this.useNetworkStream = false,
     this.networkHost = defaultHost,
     this.networkPort = defaultPort,
@@ -34,6 +35,10 @@ class AppSettings {
 
   final String? saveDirectory;
   final bool lslEnabled;
+
+  /// Label advertised as the LSL outlet hostname (when supported).
+  final String hostname;
+
   final bool useNetworkStream;
   final String networkHost;
   final int networkPort;
@@ -49,6 +54,7 @@ class AppSettings {
   /// Folder under the Dropbox App Folder (e.g. `EmotivSessions`).
   final String dropboxRemoteRoot;
 
+  static const String defaultHostname = 'iPhone';
   static const String defaultHost = 'apogee.tailc8d2c6.ts.net';
   static const int defaultPort = 9878;
   static const String defaultDropboxRemoteRoot = 'EmotivSessions';
@@ -57,6 +63,7 @@ class AppSettings {
     String? saveDirectory,
     bool clearSaveDirectory = false,
     bool? lslEnabled,
+    String? hostname,
     bool? useNetworkStream,
     String? networkHost,
     int? networkPort,
@@ -72,6 +79,7 @@ class AppSettings {
           ? null
           : (saveDirectory ?? this.saveDirectory),
       lslEnabled: lslEnabled ?? this.lslEnabled,
+      hostname: hostname ?? this.hostname,
       useNetworkStream: useNetworkStream ?? this.useNetworkStream,
       networkHost: networkHost ?? this.networkHost,
       networkPort: networkPort ?? this.networkPort,
@@ -92,6 +100,7 @@ class AppSettingsRepository {
   static const _prefix = 'acq.v1.';
   static const _saveDirectoryKey = '${_prefix}saveDirectory';
   static const _lslEnabledKey = '${_prefix}lslEnabled';
+  static const _hostnameKey = '${_prefix}hostname';
   static const _useNetworkStreamKey = '${_prefix}useNetworkStream';
   static const _networkHostKey = '${_prefix}networkHost';
   static const _networkPortKey = '${_prefix}networkPort';
@@ -108,9 +117,13 @@ class AppSettingsRepository {
       await prefs.remove(_saveDirectoryKey);
       saveDirectory = null;
     }
+    final hostnameRaw = prefs.getString(_hostnameKey)?.trim();
     return AppSettings(
       saveDirectory: effectiveSaveDirectory(saveDirectory),
       lslEnabled: prefs.getBool(_lslEnabledKey) ?? true,
+      hostname: (hostnameRaw == null || hostnameRaw.isEmpty)
+          ? AppSettings.defaultHostname
+          : hostnameRaw,
       useNetworkStream: prefs.getBool(_useNetworkStreamKey) ?? false,
       networkHost: prefs.getString(_networkHostKey) ?? AppSettings.defaultHost,
       networkPort: prefs.getInt(_networkPortKey) ?? AppSettings.defaultPort,
@@ -134,6 +147,12 @@ class AppSettingsRepository {
       await prefs.remove(_saveDirectoryKey);
     }
     await prefs.setBool(_lslEnabledKey, settings.lslEnabled);
+    await prefs.setString(
+      _hostnameKey,
+      settings.hostname.trim().isEmpty
+          ? AppSettings.defaultHostname
+          : settings.hostname.trim(),
+    );
     await prefs.setBool(_useNetworkStreamKey, settings.useNetworkStream);
     await prefs.setString(_networkHostKey, settings.networkHost);
     await prefs.setInt(_networkPortKey, settings.networkPort);
