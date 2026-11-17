@@ -4,6 +4,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../domain/acquisition_health.dart';
 import '../domain/acquisition_state.dart';
+import '../domain/samples.dart';
 import 'providers.dart';
 import 'settings_page.dart';
 
@@ -82,7 +83,7 @@ class _Body extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final health = state.health;
-    final preview = ref.watch(uiEegPreviewProvider);
+    final cqAsync = ref.watch(uiContactQualityProvider);
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -117,20 +118,15 @@ class _Body extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('EEG preview', style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  'Connection quality',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
                 const SizedBox(height: 8),
-                preview.when(
-                  data: (values) => Text(
-                    values.isEmpty
-                        ? '—'
-                        : values
-                            .take(6)
-                            .map((v) => v.toStringAsFixed(1))
-                            .join('  '),
-                    style: const TextStyle(fontFamily: 'monospace'),
-                  ),
-                  loading: () => const Text('—'),
-                  error: (error, stack) => const Text('—'),
+                cqAsync.when(
+                  data: (cq) => _ContactQualityPanel(cq: cq),
+                  loading: () => const _ContactQualityPanel(cq: null),
+                  error: (error, stack) => const _ContactQualityPanel(cq: null),
                 ),
               ],
             ),
@@ -329,6 +325,87 @@ class _Controls extends ConsumerWidget {
             icon: const Icon(Icons.link_off),
             label: const Text('Stop'),
           ),
+      ],
+    );
+  }
+}
+
+String _contactQualityLabel(int cq) {
+  return switch (cq) {
+    0 => 'None',
+    <= 31 => 'Poor',
+    <= 63 => 'Fair',
+    <= 95 => 'Good',
+    _ => 'Excellent',
+  };
+}
+
+Color _contactQualityColor(int cq) {
+  return switch (cq) {
+    0 => Colors.grey.shade600,
+    <= 31 => Colors.red.shade700,
+    <= 63 => Colors.orange.shade800,
+    <= 95 => Colors.lightGreen.shade700,
+    _ => Colors.green.shade700,
+  };
+}
+
+class _ContactQualityPanel extends StatelessWidget {
+  const _ContactQualityPanel({required this.cq});
+
+  final int? cq;
+
+  @override
+  Widget build(BuildContext context) {
+    final value = cq;
+    if (value == null) {
+      return const Text('—');
+    }
+
+    final bandColor = _contactQualityColor(value);
+    final label = _contactQualityLabel(value);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [
+            Text(
+              '$value',
+              style: Theme.of(context).textTheme.displaySmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: bandColor,
+                  ),
+            ),
+            const SizedBox(width: 8),
+            Text('/ 127', style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(width: 12),
+            Chip(
+              label: Text(label),
+              backgroundColor: bandColor.withValues(alpha: 0.15),
+              side: BorderSide(color: bandColor),
+              visualDensity: VisualDensity.compact,
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final name in EegSample.channelNames)
+              Chip(
+                label: Text(name, style: const TextStyle(fontSize: 11)),
+                backgroundColor: bandColor.withValues(alpha: 0.12),
+                side: BorderSide(color: bandColor.withValues(alpha: 0.6)),
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+          ],
+        ),
       ],
     );
   }

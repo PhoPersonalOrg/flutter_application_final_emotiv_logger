@@ -79,13 +79,13 @@ final acquisitionStateProvider = StreamProvider<AcquisitionState>((ref) {
   });
 });
 
-/// Throttled latest EEG values for optional preview.
-final uiEegPreviewProvider = StreamProvider<List<double>>((ref) async* {
+/// Throttled latest Mode-7 contact quality (0–127) for the Record tab.
+final uiContactQualityProvider = StreamProvider<int>((ref) async* {
   final session = ref.watch(acquisitionSessionProvider);
   await for (final _ in session.hub.uiAvailable) {
     final batch = session.hub.takeUiEeg(max: 1);
     if (batch.isNotEmpty) {
-      yield batch.last.values;
+      yield batch.last.contactQuality;
     }
   }
 });
@@ -144,7 +144,8 @@ class SessionListNotifier extends AsyncNotifier<List<SessionRecord>> {
     final session = ref.read(acquisitionSessionProvider);
     return SessionLibrary.listSessions(
       saveDirectory: settings.saveDirectory,
-      activeSessionPath: session.health.csvSessionPath,
+      // Only mark active while CSV is open / flushing — not after Idle Stop.
+      activeSessionPath: session.state.activeCsvSessionPath,
     );
   }
 

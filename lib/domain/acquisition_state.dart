@@ -6,6 +6,18 @@ sealed class AcquisitionState {
 
   String get label;
   AcquisitionHealth get health;
+
+  /// Session folder that is still being written (or flushed), if any.
+  ///
+  /// Idle / Failed / Scanning / etc. keep [AcquisitionHealth.csvSessionPath] as
+  /// the last path for Record-tab display, but must not block Sessions upload.
+  String? get activeCsvSessionPath => switch (this) {
+        AcquisitionPreparing() ||
+        AcquisitionStreaming() ||
+        AcquisitionStopping() =>
+          health.csvSessionPath,
+        _ => null,
+      };
 }
 
 class AcquisitionIdle extends AcquisitionState {
