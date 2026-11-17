@@ -76,7 +76,7 @@
 					<key>UISceneConfigurationName</key>
 					<string>flutter</string>
 					<key>UISceneDelegateClassName</key>
-					<string>DropboxFlutterSceneDelegate</string>
+					<string>$(PRODUCT_MODULE_NAME).DropboxFlutterSceneDelegate</string>
 					<key>UISceneStoryboardFile</key>
 					<string>Main</string>
 				</dict>
