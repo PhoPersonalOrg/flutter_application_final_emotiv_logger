@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import '../domain/ble_uuids.dart';
 import 'crypto_codec.dart';
 
 /// Resolves AES key material from a connected headset.
@@ -63,6 +64,21 @@ class DeviceIdentityResolver {
 
   bool looksLikeEmotivHeadset(String platformName) =>
       tryParseAdvertisement(platformName) != null;
+
+  /// Whether a scan hit should appear in the headset list.
+  ///
+  /// Accepts preferred devices, Emotiv advertising names, or ads that include
+  /// Emotiv scan-filter service UUIDs. Empty names alone are not enough — on
+  /// Windows `withServices` is not applied by the WinRT plugin.
+  bool isEmotivScanCandidate(
+    String name, {
+    Iterable<String> serviceUuids = const [],
+    bool isPreferred = false,
+  }) {
+    if (isPreferred) return true;
+    if (tryParseAdvertisement(name) != null) return true;
+    return EmotivBleUuids.advertisesScanService(serviceUuids);
+  }
 
   /// Parse advertised name into [DeviceIdentity].
   DeviceIdentity resolveFromName(String platformName) {

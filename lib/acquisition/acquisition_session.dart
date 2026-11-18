@@ -177,12 +177,20 @@ class AcquisitionSession {
             _pendingDiscoveredClear = false;
             try {
               for (final d in FlutterBluePlus.connectedDevices) {
-                _considerScanResult(d, _rssi[d.remoteId.str] ?? 0);
+                _considerScanResult(
+                  d,
+                  _rssi[d.remoteId.str] ?? 0,
+                );
               }
             } catch (_) {}
           }
           for (final r in results) {
-            _considerScanResult(r.device, r.rssi);
+            _considerScanResult(
+              r.device,
+              r.rssi,
+              advName: r.advertisementData.advName,
+              serviceUuids: r.advertisementData.serviceUuids,
+            );
           }
           _publishScanDevices(clearError: true);
           if (_autoConnectPreferred) {
@@ -786,7 +794,12 @@ class AcquisitionSession {
       _scanSubs.add(
         FlutterBluePlus.scanResults.listen((results) {
           for (final r in results) {
-            _considerScanResult(r.device, r.rssi);
+            _considerScanResult(
+              r.device,
+              r.rssi,
+              advName: r.advertisementData.advName,
+              serviceUuids: r.advertisementData.serviceUuids,
+            );
             final matchId = r.device.remoteId.str == id;
             final matchName =
                 name != null && name.isNotEmpty && r.device.platformName == name;
@@ -880,23 +893,35 @@ class AcquisitionSession {
         Guid(EmotivBleUuids.serviceB),
       ]);
       for (final d in withServices) {
+        // Windows systemDevices ignores withServices; require name/preferred.
         _considerScanResult(d, _rssi[d.remoteId.str] ?? 0);
       }
     } catch (_) {}
   }
 
-  void _considerScanResult(BluetoothDevice device, int rssi) {
-    final name = device.platformName;
+  void _considerScanResult(
+    BluetoothDevice device,
+    int rssi, {
+    String? advName,
+    List<Guid> serviceUuids = const [],
+  }) {
     final id = device.remoteId.str;
-    final parsed = name.isEmpty
-        ? null
-        : _identityResolver.tryParseAdvertisement(name);
+    final platformName = device.platformName.trim();
+    final resolvedAdv = (advName ?? '').trim();
+    final name = platformName.isNotEmpty ? platformName : resolvedAdv;
     final isPreferred = id == _preferredId ||
-        (_preferredName != null && name == _preferredName);
+        (_preferredName != null &&
+            name.isNotEmpty &&
+            name == _preferredName);
 
-    // Keep service-filtered hits even when the local name is empty (common on
-    // some Android stacks until GAP name is read); prefer parseable Emotiv names.
-    if (name.isNotEmpty && parsed == null && !isPreferred) {
+    final candidate = _identityResolver.isEmotivScanCandidate(
+      name,
+      serviceUuids: serviceUuids.map((g) => g.str),
+      isPreferred: isPreferred,
+    );
+    if (!candidate) {
+      _discovered.remove(id);
+      _rssi.remove(id);
       return;
     }
 

@@ -31,6 +31,18 @@ abstract final class EmotivBleUuids {
       _matches(uuid, serviceBControl);
   static bool isHeadsetConfig(String uuid) => _matches(uuid, headsetConfig);
 
+  /// True when [uuid] is one of the services used as a scan filter.
+  static bool isAdvertisedScanService(String uuid) =>
+      _matches(uuid, control, serviceB);
+
+  /// True when any advertised UUID matches [control] or [serviceB].
+  static bool advertisesScanService(Iterable<String> serviceUuids) {
+    for (final uuid in serviceUuids) {
+      if (isAdvertisedScanService(uuid)) return true;
+    }
+    return false;
+  }
+
   /// Matches full or 16-bit Battery Level UUID (`0x2A19`).
   static bool isBatteryLevel(String uuid) {
     final id = uuid.toUpperCase().replaceAll('-', '');
