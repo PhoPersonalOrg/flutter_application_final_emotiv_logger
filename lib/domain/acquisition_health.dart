@@ -22,6 +22,7 @@ class AcquisitionHealth {
     this.networkConnected = false,
     this.networkMessage,
     this.dropboxMessage,
+    this.syncMessage,
     this.batteryPercent,
   });
 
@@ -48,8 +49,11 @@ class AcquisitionHealth {
   final bool networkConnected;
   final String? networkMessage;
 
-  /// Last Dropbox auto-upload status (success or error).
+  /// Last Dropbox one-shot upload status (legacy / manual paths).
   final String? dropboxMessage;
+
+  /// Live Dropbox/SMB sync status while recording or after finalize.
+  final String? syncMessage;
 
   /// Headset battery from BLE Battery Level (`0x2A19`), 0–100. Null if unknown.
   final int? batteryPercent;
@@ -80,6 +84,8 @@ class AcquisitionHealth {
     String? networkMessage,
     String? dropboxMessage,
     bool clearDropboxMessage = false,
+    String? syncMessage,
+    bool clearSyncMessage = false,
     int? batteryPercent,
     bool clearBatteryPercent = false,
   }) {
@@ -109,6 +115,9 @@ class AcquisitionHealth {
       dropboxMessage: clearDropboxMessage
           ? null
           : (dropboxMessage ?? this.dropboxMessage),
+      syncMessage: clearSyncMessage
+          ? null
+          : (syncMessage ?? this.syncMessage),
       batteryPercent: clearBatteryPercent
           ? null
           : (batteryPercent ?? this.batteryPercent),

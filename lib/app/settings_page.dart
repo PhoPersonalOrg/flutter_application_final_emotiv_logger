@@ -92,7 +92,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       ref.invalidate(dropboxLinkedProvider);
       if (!mounted) return;
       setState(() {
-        _draft = _draft.copyWith(dropboxAutoUpload: false);
+        _draft = _draft.copyWith(dropboxLiveSync: false);
         _dropboxStatus = 'Not connected';
       });
     } catch (e) {
@@ -199,7 +199,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           const ListTile(
             contentPadding: EdgeInsets.zero,
             title: Text('Dropbox'),
-            subtitle: Text('App Folder sync for session uploads'),
+            subtitle: Text('Live App Folder sync while recording'),
           ),
           if (_dropboxStatus != null)
             Padding(
@@ -230,12 +230,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
-            title: const Text('Auto-upload after Stop'),
-            subtitle: const Text('Uploads the finished session folder'),
-            value: _draft.dropboxAutoUpload,
+            title: const Text('Live sync while recording'),
+            subtitle: const Text(
+              'Appends CSVs during capture; commits on Stop',
+            ),
+            value: _draft.dropboxLiveSync,
             onChanged: linked
                 ? (v) => setState(
-                      () => _draft = _draft.copyWith(dropboxAutoUpload: v),
+                      () => _draft = _draft.copyWith(dropboxLiveSync: v),
                     )
                 : null,
           ),

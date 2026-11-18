@@ -141,6 +141,7 @@ class _BookmarkEditorPageState extends ConsumerState<BookmarkEditorPage> {
   late final TextEditingController _domain;
   late TransferProtocol _protocol;
   late bool _rememberPassword;
+  late bool _liveSync;
   bool _testing = false;
   bool _saving = false;
   String? _status;
@@ -161,6 +162,7 @@ class _BookmarkEditorPageState extends ConsumerState<BookmarkEditorPage> {
     _smbShare = TextEditingController(text: e?.smbShare ?? '');
     _domain = TextEditingController(text: e?.domain ?? '');
     _rememberPassword = e?.rememberPassword ?? true;
+    _liveSync = e?.liveSync ?? true;
     if (e != null && e.rememberPassword) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         final pw =
@@ -202,6 +204,7 @@ class _BookmarkEditorPageState extends ConsumerState<BookmarkEditorPage> {
       smbShare: share,
       domain: _domain.text.trim(),
       rememberPassword: _rememberPassword,
+      liveSync: _protocol == TransferProtocol.smb && _liveSync,
     );
   }
 
@@ -477,6 +480,18 @@ class _BookmarkEditorPageState extends ConsumerState<BookmarkEditorPage> {
               value: _rememberPassword,
               onChanged: (v) => setState(() => _rememberPassword = v),
             ),
+            if (_protocol == TransferProtocol.smb)
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Live sync while recording'),
+                subtitle: const Text(
+                  'Requires remembered password; appends CSVs during capture',
+                ),
+                value: _liveSync,
+                onChanged: _rememberPassword
+                    ? (v) => setState(() => _liveSync = v)
+                    : null,
+              ),
             if (_protocol == TransferProtocol.smb) ...[
               TextFormField(
                 controller: _smbShare,

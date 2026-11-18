@@ -14,6 +14,8 @@ import '../domain/acquisition_state.dart';
 import '../domain/ble_uuids.dart';
 import '../domain/samples.dart';
 import '../sessions/dropbox_sync.dart';
+import '../sessions/live_session_sync.dart';
+import '../sessions/server_bookmark.dart';
 import '../sinks/csv_sink.dart';
 import '../sinks/lsl_sink.dart';
 import '../sinks/network_sink.dart';
@@ -26,20 +28,30 @@ class AcquisitionSession {
     AppSettings? initialSettings,
     Future<void> Function(AppSettings settings)? persistSettings,
     DropboxSync? dropboxSync,
+    LiveSessionSync? liveSync,
+    Future<BookmarkStoreState> Function()? loadBookmarks,
+    Future<String?> Function(String bookmarkId)? readPassword,
   })  : _settings = initialSettings ?? const AppSettings(),
-        _persistSettings = persistSettings,
-        _dropbox = dropboxSync ?? DropboxSync() {
+        _persistSettings = persistSettings {
     _preferredId = _settings.preferredDeviceId;
     _preferredName = _settings.preferredDeviceName;
     _hub = SampleHub(onHealth: _mutateHealth);
     _csv = CsvSink(hub: _hub);
     _lsl = LslSink(hub: _hub, onHealth: _mutateHealth);
     _network = NetworkSink(hub: _hub, onHealth: _mutateHealth);
+    _liveSync = liveSync ??
+        LiveSessionSync(
+          dropbox: dropboxSync ?? DropboxSync(),
+          loadBookmarks: loadBookmarks ??
+              () async => const BookmarkStoreState(),
+          readPassword: readPassword ?? ((_) async => null),
+          onStatus: _onLiveSyncStatus,
+        );
     _stateController.add(const AcquisitionIdle());
   }
 
   final Future<void> Function(AppSettings settings)? _persistSettings;
-  final DropboxSync _dropbox;
+  late final LiveSessionSync _liveSync;
 
   final _stateController =
       StreamController<AcquisitionState>.broadcast(sync: true);
@@ -227,6 +239,7 @@ class AcquisitionSession {
     await _cancelReconnect();
     await _stopScanRadio();
     await _orderedTeardown(disconnectBle: true);
+    await _liveSync.dispose();
     await _decode.dispose();
     await _hub.dispose();
     await _stateController.close();
@@ -293,6 +306,7 @@ class AcquisitionSession {
       // CSV is first-class but must never abort BLE arming.
       var sessionPath = '';
       try {
+        await _liveSync.stop(timeout: const Duration(seconds: 5));
         final csvStart = await _csv.startSession(
           saveDirectory: _settings.saveDirectory,
           identity: _identity!,
@@ -303,6 +317,13 @@ class AcquisitionSession {
             csvSessionPath: csvStart.sessionPath,
             csvMessage: csvStart.message,
             csvUsingFallback: csvStart.usedFallback,
+          ),
+        );
+        unawaited(
+          _liveSync.start(
+            sessionPath: sessionPath,
+            settings: _settings,
+            flushCsv: _csv.flush,
           ),
         );
       } catch (e) {
@@ -810,10 +831,6 @@ class AcquisitionSession {
       _emit(AcquisitionStopping(deviceName: name, health: _health));
     }
 
-    final sessionPath = _csv.sessionPath ?? _health.csvSessionPath;
-    final shouldAutoUploadDropbox =
-        disconnectBle && _userStopRequested && _settings.dropboxAutoUpload;
-
     _acceptPackets = false;
     _rateTimer?.cancel();
     _rateTimer = null;
@@ -823,6 +840,13 @@ class AcquisitionSession {
 
     try {
       await _csv.stop();
+    } catch (_) {}
+    try {
+      await _liveSync.stop(
+        timeout: disconnectBle
+            ? const Duration(seconds: 45)
+            : const Duration(seconds: 15),
+      );
     } catch (_) {}
     try {
       await _lsl.stop();
@@ -841,34 +865,27 @@ class AcquisitionSession {
       _device = null;
       _mutateHealth((h) => h.copyWith(clearBatteryPercent: true));
     }
-
-    if (shouldAutoUploadDropbox) {
-      unawaited(_autoUploadDropbox(sessionPath));
-    }
   }
 
-  Future<void> _autoUploadDropbox(String? sessionPath) async {
+  void _onLiveSyncStatus(String? message) {
     _mutateHealth(
-      (h) => h.copyWith(dropboxMessage: 'Dropbox: uploading…'),
+      (h) => message == null
+          ? h.copyWith(clearSyncMessage: true)
+          : h.copyWith(syncMessage: message),
     );
-    if (_state is AcquisitionIdle) {
+    final s = _state;
+    if (s is AcquisitionStreaming) {
+      _emit(
+        AcquisitionStreaming(
+          deviceName: s.deviceName,
+          sessionDir: s.sessionDir,
+          health: _health,
+        ),
+      );
+    } else if (s is AcquisitionIdle) {
       _emit(AcquisitionIdle(health: _health));
-    }
-
-    final ok = await _dropbox.tryAutoUpload(
-      sessionPath,
-      enabled: true,
-      remoteRoot: _settings.dropboxRemoteRoot,
-    );
-    _mutateHealth(
-      (h) => h.copyWith(
-        dropboxMessage: ok
-            ? 'Dropbox: uploaded'
-            : 'Dropbox: ${_dropbox.lastError ?? 'upload failed'}',
-      ),
-    );
-    if (_state is AcquisitionIdle) {
-      _emit(AcquisitionIdle(health: _health));
+    } else if (s is AcquisitionStopping) {
+      _emit(AcquisitionStopping(deviceName: s.deviceName, health: _health));
     }
   }
 

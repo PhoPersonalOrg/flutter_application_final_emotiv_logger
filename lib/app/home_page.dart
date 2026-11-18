@@ -299,7 +299,13 @@ class _HealthCard extends StatelessWidget {
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
-            if (health.dropboxMessage != null) ...[
+            if (health.syncMessage != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                health.syncMessage!,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ] else if (health.dropboxMessage != null) ...[
               const SizedBox(height: 4),
               Text(
                 health.dropboxMessage!,

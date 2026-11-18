@@ -38,6 +38,7 @@ class ServerBookmark {
     this.smbShare = '',
     this.domain = '',
     this.rememberPassword = false,
+    this.liveSync = true,
   });
 
   final String id;
@@ -51,6 +52,9 @@ class ServerBookmark {
   final String domain;
   final bool rememberPassword;
 
+  /// When true (SMB + remembered password), push CSVs during recording.
+  final bool liveSync;
+
   ServerBookmark copyWith({
     String? id,
     String? name,
@@ -62,6 +66,7 @@ class ServerBookmark {
     String? smbShare,
     String? domain,
     bool? rememberPassword,
+    bool? liveSync,
   }) {
     return ServerBookmark(
       id: id ?? this.id,
@@ -74,6 +79,7 @@ class ServerBookmark {
       smbShare: smbShare ?? this.smbShare,
       domain: domain ?? this.domain,
       rememberPassword: rememberPassword ?? this.rememberPassword,
+      liveSync: liveSync ?? this.liveSync,
     );
   }
 
@@ -88,6 +94,7 @@ class ServerBookmark {
         'smbShare': normalizeSmbShare(smbShare),
         'domain': domain,
         'rememberPassword': rememberPassword,
+        'liveSync': liveSync,
       };
 
   factory ServerBookmark.fromJson(Map<String, dynamic> json) {
@@ -103,6 +110,7 @@ class ServerBookmark {
       smbShare: normalizeSmbShare(json['smbShare'] as String? ?? ''),
       domain: json['domain'] as String? ?? '',
       rememberPassword: json['rememberPassword'] as bool? ?? false,
+      liveSync: json['liveSync'] as bool? ?? true,
     );
   }
 

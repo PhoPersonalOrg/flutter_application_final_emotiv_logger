@@ -48,9 +48,12 @@ final dropboxLinkedProvider = FutureProvider<bool>((ref) async {
 });
 
 final acquisitionSessionProvider = Provider<AcquisitionSession>((ref) {
+  final bookmarks = ref.read(bookmarkRepositoryProvider);
   final session = AcquisitionSession(
     initialSettings: ref.read(settingsProvider),
     dropboxSync: ref.read(dropboxSyncProvider),
+    loadBookmarks: bookmarks.load,
+    readPassword: bookmarks.readPassword,
     persistSettings: (settings) async {
       await ref.read(settingsRepositoryProvider).save(settings);
       ref.read(settingsProvider.notifier).applyLocal(settings);

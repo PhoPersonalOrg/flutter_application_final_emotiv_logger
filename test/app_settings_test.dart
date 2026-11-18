@@ -5,13 +5,14 @@ void main() {
   test('AppSettings copyWith and protocol storage', () {
     const s = AppSettings();
     expect(s.hostname, AppSettings.defaultHostname);
+    expect(s.dropboxLiveSync, isTrue);
     final next = s.copyWith(
       lslEnabled: false,
       hostname: 'LabPhone',
       useNetworkStream: true,
       networkProtocol: NetworkProtocol.tcp,
       networkPort: 1234,
-      dropboxAutoUpload: true,
+      dropboxLiveSync: false,
       dropboxRemoteRoot: 'LabUploads',
     );
     expect(next.lslEnabled, isFalse);
@@ -19,7 +20,7 @@ void main() {
     expect(next.useNetworkStream, isTrue);
     expect(next.networkProtocol, NetworkProtocol.tcp);
     expect(next.networkPort, 1234);
-    expect(next.dropboxAutoUpload, isTrue);
+    expect(next.dropboxLiveSync, isFalse);
     expect(next.dropboxRemoteRoot, 'LabUploads');
     expect(NetworkProtocolX.fromStorage('tcp'), NetworkProtocol.tcp);
     expect(NetworkProtocolX.fromStorage(null), NetworkProtocol.udp);

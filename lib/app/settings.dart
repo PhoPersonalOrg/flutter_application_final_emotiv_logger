@@ -29,7 +29,7 @@ class AppSettings {
     this.networkProtocol = NetworkProtocol.udp,
     this.preferredDeviceId,
     this.preferredDeviceName,
-    this.dropboxAutoUpload = false,
+    this.dropboxLiveSync = true,
     this.dropboxRemoteRoot = defaultDropboxRemoteRoot,
   });
 
@@ -48,8 +48,8 @@ class AppSettings {
   final String? preferredDeviceId;
   final String? preferredDeviceName;
 
-  /// Upload finished session folders to Dropbox App Folder after Stop.
-  final bool dropboxAutoUpload;
+  /// Live Dropbox sync while recording (commits on Stop). Default on.
+  final bool dropboxLiveSync;
 
   /// Folder under the Dropbox App Folder (e.g. `EmotivSessions`).
   final String dropboxRemoteRoot;
@@ -71,7 +71,7 @@ class AppSettings {
     String? preferredDeviceId,
     String? preferredDeviceName,
     bool clearPreferredDevice = false,
-    bool? dropboxAutoUpload,
+    bool? dropboxLiveSync,
     String? dropboxRemoteRoot,
   }) {
     return AppSettings(
@@ -90,7 +90,7 @@ class AppSettings {
       preferredDeviceName: clearPreferredDevice
           ? null
           : (preferredDeviceName ?? this.preferredDeviceName),
-      dropboxAutoUpload: dropboxAutoUpload ?? this.dropboxAutoUpload,
+      dropboxLiveSync: dropboxLiveSync ?? this.dropboxLiveSync,
       dropboxRemoteRoot: dropboxRemoteRoot ?? this.dropboxRemoteRoot,
     );
   }
@@ -107,8 +107,20 @@ class AppSettingsRepository {
   static const _networkProtocolKey = '${_prefix}networkProtocol';
   static const _preferredDeviceIdKey = '${_prefix}preferredDeviceId';
   static const _preferredDeviceNameKey = '${_prefix}preferredDeviceName';
+  static const _dropboxLiveSyncKey = '${_prefix}dropboxLiveSync';
   static const _dropboxAutoUploadKey = '${_prefix}dropboxAutoUpload';
   static const _dropboxRemoteRootKey = '${_prefix}dropboxRemoteRoot';
+
+  /// Resolves live-sync flag: new key, else migrate legacy auto-upload, else true.
+  static bool resolveDropboxLiveSync(SharedPreferences prefs) {
+    if (prefs.containsKey(_dropboxLiveSyncKey)) {
+      return prefs.getBool(_dropboxLiveSyncKey) ?? true;
+    }
+    if (prefs.containsKey(_dropboxAutoUploadKey)) {
+      return prefs.getBool(_dropboxAutoUploadKey) ?? true;
+    }
+    return true;
+  }
 
   Future<AppSettings> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -132,7 +144,7 @@ class AppSettingsRepository {
       ),
       preferredDeviceId: prefs.getString(_preferredDeviceIdKey),
       preferredDeviceName: prefs.getString(_preferredDeviceNameKey),
-      dropboxAutoUpload: prefs.getBool(_dropboxAutoUploadKey) ?? false,
+      dropboxLiveSync: resolveDropboxLiveSync(prefs),
       dropboxRemoteRoot: prefs.getString(_dropboxRemoteRootKey) ??
           AppSettings.defaultDropboxRemoteRoot,
     );
@@ -176,7 +188,7 @@ class AppSettingsRepository {
     } else {
       await prefs.remove(_preferredDeviceNameKey);
     }
-    await prefs.setBool(_dropboxAutoUploadKey, settings.dropboxAutoUpload);
+    await prefs.setBool(_dropboxLiveSyncKey, settings.dropboxLiveSync);
     await prefs.setString(
       _dropboxRemoteRootKey,
       settings.dropboxRemoteRoot.trim().isEmpty
