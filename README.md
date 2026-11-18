@@ -45,7 +45,22 @@ Uploads go into the Dropbox **App Folder** (not full Dropbox access). Settings �
 4. Replace `YOUR_DROPBOX_APP_KEY` in:
    - [`ios/Runner/Info.plist`](ios/Runner/Info.plist) (`db-YOUR_DROPBOX_APP_KEY`)
    - [`android/app/src/main/AndroidManifest.xml`](android/app/src/main/AndroidManifest.xml) (`db-YOUR_DROPBOX_APP_KEY`)
-5. Run with the same key:
+5. Copy [`.env.example`](.env.example) → `.env` (gitignored) and set the same key:
+
+```bash
+cp .env.example .env
+# edit .env: DROPBOX_APP_KEY=<key>
+```
+
+6. Prefer release so iOS can be relaunched from the home screen without a debugger:
+
+```bash
+./scripts/run_release.sh
+# optional device:
+./scripts/run_release.sh -d <deviceId>
+```
+
+Or pass defines manually (debug or release):
 
 ```bash
 fvm flutter run \
@@ -106,15 +121,22 @@ Android builds require **JDK 17+** (Java 25 works with this project's Gradle **9
 Use the status-bar Flutter device picker for the target, then:
 
 ```bash
+# Release + Dropbox keys from .env (recommended for physical iOS):
+./scripts/run_release.sh
+./scripts/run_release.sh -d <deviceId>
+
 fvm flutter run
 # with Dropbox (after creating an App Folder app — see above):
+fvm flutter run --dart-define-from-file=.env
+# or manually:
 fvm flutter run --dart-define=DROPBOX_APP_KEY=<key>
 # Pixel 2 example:
 fvm flutter run -d FA7B71A02109
 # or workspace Action Buttons: Run Device / Debug Device / Build iOS
+# (Build iOS uses --release --dart-define-from-file=.env)
 ```
 
-iOS simulator builds work for UI only; **real headset acquisition requires a physical device**.
+iOS simulator builds work for UI only; **real headset acquisition requires a physical device**. Debug installs often stop working once the debugger disconnects; use `./scripts/run_release.sh` or the release launch config for a home-screen-launchable build.
 
 ## Health UI
 

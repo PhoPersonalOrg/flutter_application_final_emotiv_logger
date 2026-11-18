@@ -37,12 +37,12 @@
         {
           "name": "$(tools) Build iOS",
           "color": "#ed9600",
-          "tooltip": "flutter build ios (device; uses Xcode signing)",
+          "tooltip": "flutter build ios --release with Dropbox defines from .env",
           "useVsCodeApi": false,
           "singleInstance": true,
           "terminalName": "Flutter iOS Build",
           "cwd": "${workspaceFolder}",
-          "command": "fvm flutter build ios"
+          "command": "fvm flutter build ios --release --dart-define-from-file=.env"
         },
         {
           "name": "$(play) Run Device",
