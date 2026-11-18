@@ -141,7 +141,7 @@ Android builds require **JDK 17+** (Java 25 works with this project's Gradle **9
 
 App Store Connect rejects uploads that reuse `CFBundleVersion` (the `+N` in `pubspec.yaml` `version: x.y.z+N`). Bump happens automatically when the Codemagic **iOS+Deploy** workflow runs this pre-build script:
 
-1. Codemagic → app → **Environment variables** → add `APP_APPLE_ID` (App Store Connect → your app → **App Information** → **Apple ID**).
+1. Codemagic → app → **Environment variables** → add `APP_APPLE_ID` (App Store Connect → your app → **App Information** → **Apple ID**). Do **not** set `FLUTTER_BUILD_NUMBER` or `FLUTTER_BUILD_NAME` as env vars — Flutter reserves them and aborts the build.
 2. Workflow **iOS+Deploy** → **Build** → **Pre-build script**:
 
 ```bash
@@ -149,9 +149,9 @@ chmod +x scripts/codemagic_bump_build_number.sh
 ./scripts/codemagic_bump_build_number.sh
 ```
 
-3. Optional Flutter build arguments: `--build-number=$NEW_BUILD_NUMBER`
+3. Flutter build arguments (required): `--build-number=$NEW_BUILD_NUMBER`
 
-The script sets `FLUTTER_BUILD_NUMBER` to `max(ASC/TestFlight latest+1, PROJECT_BUILD_NUMBER, pubspec build)`. Without `APP_APPLE_ID` it still advances with Codemagic’s `PROJECT_BUILD_NUMBER` / the committed pubspec build.
+The script sets `NEW_BUILD_NUMBER` to `max(ASC/TestFlight latest+1, PROJECT_BUILD_NUMBER, pubspec build)`. Flutter then writes `FLUTTER_BUILD_NUMBER` into `Generated.xcconfig` from `--build-number`. Without `APP_APPLE_ID` it still advances with Codemagic’s `PROJECT_BUILD_NUMBER` / the committed pubspec build.
 
 ## Build / run
 

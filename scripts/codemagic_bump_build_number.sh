@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Resolve the next iOS/Android build number for Codemagic and export it for
-# Flutter (`FLUTTER_BUILD_NUMBER`) / agvtool.
+# Resolve the next iOS/Android build number for Codemagic and export
+# NEW_BUILD_NUMBER for `flutter build ... --build-number=$NEW_BUILD_NUMBER`.
+#
+# Do NOT export FLUTTER_BUILD_NUMBER: Flutter reserves that name for Generated
+# Xcode settings and exits with:
+#   FLUTTER_BUILD_NUMBER is used by the framework and cannot be set in the environment.
 #
 # Prefer App Store Connect / TestFlight latest + 1 when APP_APPLE_ID and API
 # credentials are available; otherwise use max(PROJECT_BUILD_NUMBER, pubspec).
@@ -8,11 +12,11 @@
 # Codemagic Flutter workflow editor (iOS+Deploy):
 #   1. Environment variables → add APP_APPLE_ID (App Store Connect → App
 #      Information → Apple ID). ASC API key vars are usually already set for
-#      publishing.
+#      publishing. Do not define FLUTTER_BUILD_NUMBER as a workflow env var.
 #   2. Build → Pre-build script:
 #        chmod +x scripts/codemagic_bump_build_number.sh
 #        ./scripts/codemagic_bump_build_number.sh
-#   3. Optional Flutter build arguments (belt-and-suspenders):
+#   3. Flutter build arguments (required so the resolved number is applied):
 #        --build-number=$NEW_BUILD_NUMBER
 #
 # Optional env:
@@ -87,15 +91,13 @@ fi
 echo "Using build number: $next (pubspec=$pubspec_build cm=$cm_next asc_latest=$latest_from_asc)"
 
 if [[ -n "${CM_ENV:-}" ]]; then
-  {
-    echo "FLUTTER_BUILD_NUMBER=$next"
-    echo "NEW_BUILD_NUMBER=$next"
-  } >>"$CM_ENV"
-  echo "Wrote FLUTTER_BUILD_NUMBER / NEW_BUILD_NUMBER to \$CM_ENV"
+  echo "NEW_BUILD_NUMBER=$next" >>"$CM_ENV"
+  echo "Wrote NEW_BUILD_NUMBER=$next to \$CM_ENV"
 fi
 
-export FLUTTER_BUILD_NUMBER="$next"
 export NEW_BUILD_NUMBER="$next"
+# Reserved by Flutter; never export them (even empty). Unset for this process only.
+unset FLUTTER_BUILD_NUMBER FLUTTER_BUILD_NAME || true
 
 # Do not run agvtool here: it rewrites Info.plist / pbxproj away from
 # $(FLUTTER_BUILD_NUMBER), which Flutter relies on during `flutter build ipa`.
