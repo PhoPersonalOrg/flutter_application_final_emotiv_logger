@@ -19,7 +19,10 @@
             "name": "flutter_application_final_emotiv_logger (release mode)",
             "request": "launch",
             "type": "dart",
-            "flutterMode": "release"
+            "flutterMode": "release",
+            "toolArgs": [
+                "--dart-define-from-file=.env"
+            ]
         }
     ]
 }

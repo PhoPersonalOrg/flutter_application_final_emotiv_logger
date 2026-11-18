@@ -1,9 +1,15 @@
 import 'dart:async';
 
-/// Owns every BLE-related [StreamSubscription] for a session.
-/// Cancelled as a bag on every exit from connecting/preparing/streaming/reconnecting.
+/// Owns a bag of BLE-related [StreamSubscription]s.
+///
+/// Acquisition uses two bags: scan-only vs link/notify, so stopping a scan
+/// cannot cancel connection-state or characteristic listeners.
 class SessionSubscriptions {
   final List<StreamSubscription> _subs = [];
+
+  int get length => _subs.length;
+
+  bool get isEmpty => _subs.isEmpty;
 
   T add<T extends StreamSubscription>(T sub) {
     _subs.add(sub);

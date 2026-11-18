@@ -34,9 +34,14 @@ Timestamps are receive-time (headset clock is not available on this BLE path).
 
 Bottom nav **Sessions** lists prior `session_*` folders. Multi-select and transfer over **SFTP** (`dartssh2`), **SMB** (`dart_smb2`), or **Dropbox** (App Folder) to a remembered destination. Server bookmarks store host/user/path in SharedPreferences (optional password in secure storage). The live recording folder is not transferable/deletable while acquisition is open. SFTP over Tailscale is the usual path; SMB on LAN may need Local Network permission on iOS.
 
-### Dropbox sync
+### Live Dropbox / SMB sync
 
-Uploads go into the Dropbox **App Folder** (not full Dropbox access). Settings → **Connect Dropbox**, optional **Auto-upload after Stop**, and a folder name under the App Folder (default `EmotivSessions`). Sessions → select → Transfer can also target Dropbox.
+While recording, the app can **incrementally push** growing `eeg.csv` / `motion.csv` / `raw.csv` (plus `session.json`) to configured destinations:
+
+- **Dropbox** (App Folder): Settings → **Connect Dropbox**, **Live sync while recording** (default on when linked), folder under App Folder (default `EmotivSessions`). Bytes append during capture; Dropbox files are **committed on Stop**.
+- **SMB**: Bookmarks → enable **Live sync while recording** (default on) with a **remembered password**. Multiple SMB bookmarks can sync in parallel with Dropbox.
+
+Sessions → Transfer remains available for manual catch-up uploads (SFTP/SMB/Dropbox).
 
 1. Create an app at https://www.dropbox.com/developers/apps  
    - Scoped access · **App folder** · name e.g. `Emotiv Logger`
@@ -45,7 +50,22 @@ Uploads go into the Dropbox **App Folder** (not full Dropbox access). Settings �
 4. Replace `YOUR_DROPBOX_APP_KEY` in:
    - [`ios/Runner/Info.plist`](ios/Runner/Info.plist) (`db-YOUR_DROPBOX_APP_KEY`)
    - [`android/app/src/main/AndroidManifest.xml`](android/app/src/main/AndroidManifest.xml) (`db-YOUR_DROPBOX_APP_KEY`)
-5. Run with the same key:
+5. Copy [`.env.example`](.env.example) → `.env` (gitignored) and set the same key:
+
+```bash
+cp .env.example .env
+# edit .env: DROPBOX_APP_KEY=<key>
+```
+
+6. Prefer release so iOS can be relaunched from the home screen without a debugger:
+
+```bash
+./scripts/run_release.sh
+# optional device:
+./scripts/run_release.sh -d <deviceId>
+```
+
+Or pass defines manually (debug or release):
 
 ```bash
 fvm flutter run \
@@ -106,15 +126,22 @@ Android builds require **JDK 17+** (Java 25 works with this project's Gradle **9
 Use the status-bar Flutter device picker for the target, then:
 
 ```bash
+# Release + Dropbox keys from .env (recommended for physical iOS):
+./scripts/run_release.sh
+./scripts/run_release.sh -d <deviceId>
+
 fvm flutter run
 # with Dropbox (after creating an App Folder app — see above):
+fvm flutter run --dart-define-from-file=.env
+# or manually:
 fvm flutter run --dart-define=DROPBOX_APP_KEY=<key>
 # Pixel 2 example:
 fvm flutter run -d FA7B71A02109
 # or workspace Action Buttons: Run Device / Debug Device / Build iOS
+# (Build iOS uses --release --dart-define-from-file=.env)
 ```
 
-iOS simulator builds work for UI only; **real headset acquisition requires a physical device**.
+iOS simulator builds work for UI only; **real headset acquisition requires a physical device**. Debug installs often stop working once the debugger disconnects; use `./scripts/run_release.sh` or the release launch config for a home-screen-launchable build.
 
 ## Health UI
 

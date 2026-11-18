@@ -48,9 +48,12 @@ final dropboxLinkedProvider = FutureProvider<bool>((ref) async {
 });
 
 final acquisitionSessionProvider = Provider<AcquisitionSession>((ref) {
+  final bookmarks = ref.read(bookmarkRepositoryProvider);
   final session = AcquisitionSession(
     initialSettings: ref.read(settingsProvider),
     dropboxSync: ref.read(dropboxSyncProvider),
+    loadBookmarks: bookmarks.load,
+    readPassword: bookmarks.readPassword,
     persistSettings: (settings) async {
       await ref.read(settingsRepositoryProvider).save(settings);
       ref.read(settingsProvider.notifier).applyLocal(settings);
@@ -79,13 +82,13 @@ final acquisitionStateProvider = StreamProvider<AcquisitionState>((ref) {
   });
 });
 
-/// Throttled latest Mode-7 contact quality (0–127) for the Record tab.
-final uiContactQualityProvider = StreamProvider<int>((ref) async* {
+/// Emits when a fresh EEG sample reaches the UI queue (Record-tab activity).
+final uiEegActivityProvider = StreamProvider<DateTime>((ref) async* {
   final session = ref.watch(acquisitionSessionProvider);
   await for (final _ in session.hub.uiAvailable) {
     final batch = session.hub.takeUiEeg(max: 1);
     if (batch.isNotEmpty) {
-      yield batch.last.contactQuality;
+      yield batch.last.wallClock;
     }
   }
 });

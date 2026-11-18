@@ -4,7 +4,6 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../domain/acquisition_health.dart';
 import '../domain/acquisition_state.dart';
-import '../domain/samples.dart';
 import 'providers.dart';
 import 'settings_page.dart';
 
@@ -83,18 +82,41 @@ class _Body extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final health = state.health;
-    final cqAsync = ref.watch(uiContactQualityProvider);
+    final activityAsync = ref.watch(uiEegActivityProvider);
+    final sessionActive = state is AcquisitionStreaming ||
+        state is AcquisitionPreparing ||
+        state is AcquisitionConnecting ||
+        state is AcquisitionReconnecting;
 
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        _StateChip(state: state),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            _StateChip(state: state),
+            if (health.batteryPercent != null)
+              _BatteryChip(percent: health.batteryPercent!),
+          ],
+        ),
         const SizedBox(height: 12),
         _HealthCard(health: health),
         const SizedBox(height: 12),
         _Controls(state: state),
         const SizedBox(height: 12),
         if (state is AcquisitionScanning) ...[
+          if ((state as AcquisitionScanning).errorMessage != null) ...[
+            Card(
+              color: Theme.of(context).colorScheme.errorContainer,
+              child: ListTile(
+                title: Text((state as AcquisitionScanning).errorMessage!),
+                subtitle: const Text('Device list kept — tap Connect to retry'),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           _DeviceList(scanning: state as AcquisitionScanning),
           const SizedBox(height: 12),
         ],
@@ -119,14 +141,18 @@ class _Body extends ConsumerWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Connection quality',
+                  'Activity',
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
                 const SizedBox(height: 8),
-                cqAsync.when(
-                  data: (cq) => _ContactQualityPanel(cq: cq),
-                  loading: () => const _ContactQualityPanel(cq: null),
-                  error: (error, stack) => const _ContactQualityPanel(cq: null),
+                activityAsync.when(
+                  data: (lastSampleAt) => _ActivityPanel(
+                    receiving: sessionActive,
+                    lastSampleAt: lastSampleAt,
+                  ),
+                  loading: () => _ActivityPanel(receiving: sessionActive),
+                  error: (error, stack) =>
+                      _ActivityPanel(receiving: sessionActive),
                 ),
               ],
             ),
@@ -154,11 +180,38 @@ class _StateChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Chip(
-        avatar: Icon(Icons.circle, size: 12, color: _color(context)),
-        label: Text(state.label, style: const TextStyle(fontWeight: FontWeight.w600)),
+    return Chip(
+      avatar: Icon(Icons.circle, size: 12, color: _color(context)),
+      label: Text(state.label, style: const TextStyle(fontWeight: FontWeight.w600)),
+    );
+  }
+}
+
+class _BatteryChip extends StatelessWidget {
+  const _BatteryChip({required this.percent});
+  final int percent;
+
+  Color get _color {
+    if (percent >= 50) return Colors.green.shade700;
+    if (percent >= 20) return Colors.orange.shade800;
+    return Colors.red.shade700;
+  }
+
+  IconData get _icon {
+    if (percent >= 90) return Icons.battery_full;
+    if (percent >= 60) return Icons.battery_5_bar;
+    if (percent >= 40) return Icons.battery_4_bar;
+    if (percent >= 20) return Icons.battery_2_bar;
+    return Icons.battery_alert;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Chip(
+      avatar: Icon(_icon, size: 18, color: _color),
+      label: Text(
+        '$percent%',
+        style: TextStyle(fontWeight: FontWeight.w600, color: _color),
       ),
     );
   }
@@ -189,6 +242,12 @@ class _HealthCard extends StatelessWidget {
               spacing: 16,
               runSpacing: 8,
               children: [
+                _metric(
+                  'Battery',
+                  health.batteryPercent != null
+                      ? '${health.batteryPercent}%'
+                      : '—',
+                ),
                 _metric('EEG Hz', health.eegHz.toStringAsFixed(0)),
                 _metric('Motion Hz', health.motionHz.toStringAsFixed(0)),
                 _metric('EEG pkts', '${health.eegPackets}'),
@@ -250,7 +309,13 @@ class _HealthCard extends StatelessWidget {
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ],
-            if (health.dropboxMessage != null) ...[
+            if (health.syncMessage != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                health.syncMessage!,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ] else if (health.dropboxMessage != null) ...[
               const SizedBox(height: 4),
               Text(
                 health.dropboxMessage!,
@@ -313,9 +378,7 @@ class _Controls extends ConsumerWidget {
             preferredName.isNotEmpty &&
             canScan)
           FilledButton.tonalIcon(
-            onPressed: scanActive
-                ? null
-                : () => session.reconnectPreferred(),
+            onPressed: () => session.reconnectPreferred(),
             icon: const Icon(Icons.link),
             label: Text('Reconnect $preferredName'),
           ),
@@ -330,81 +393,38 @@ class _Controls extends ConsumerWidget {
   }
 }
 
-String _contactQualityLabel(int cq) {
-  return switch (cq) {
-    0 => 'None',
-    <= 31 => 'Poor',
-    <= 63 => 'Fair',
-    <= 95 => 'Good',
-    _ => 'Excellent',
-  };
-}
+class _ActivityPanel extends StatelessWidget {
+  const _ActivityPanel({
+    required this.receiving,
+    this.lastSampleAt,
+  });
 
-Color _contactQualityColor(int cq) {
-  return switch (cq) {
-    0 => Colors.grey.shade600,
-    <= 31 => Colors.red.shade700,
-    <= 63 => Colors.orange.shade800,
-    <= 95 => Colors.lightGreen.shade700,
-    _ => Colors.green.shade700,
-  };
-}
-
-class _ContactQualityPanel extends StatelessWidget {
-  const _ContactQualityPanel({required this.cq});
-
-  final int? cq;
+  final bool receiving;
+  final DateTime? lastSampleAt;
 
   @override
   Widget build(BuildContext context) {
-    final value = cq;
-    if (value == null) {
-      return const Text('—');
-    }
+    final hasSample = lastSampleAt != null;
+    final active = receiving && hasSample;
 
-    final bandColor = _contactQualityColor(value);
-    final label = _contactQualityLabel(value);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Row(
       children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.baseline,
-          textBaseline: TextBaseline.alphabetic,
-          children: [
-            Text(
-              '$value',
-              style: Theme.of(context).textTheme.displaySmall?.copyWith(
-                    fontWeight: FontWeight.w700,
-                    color: bandColor,
-                  ),
-            ),
-            const SizedBox(width: 8),
-            Text('/ 127', style: Theme.of(context).textTheme.titleSmall),
-            const SizedBox(width: 12),
-            Chip(
-              label: Text(label),
-              backgroundColor: bandColor.withValues(alpha: 0.15),
-              side: BorderSide(color: bandColor),
-              visualDensity: VisualDensity.compact,
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Wrap(
-          spacing: 6,
-          runSpacing: 6,
-          children: [
-            for (final name in EegSample.channelNames)
-              Chip(
-                label: Text(name, style: const TextStyle(fontSize: 11)),
-                backgroundColor: bandColor.withValues(alpha: 0.12),
-                side: BorderSide(color: bandColor.withValues(alpha: 0.6)),
-                visualDensity: VisualDensity.compact,
-                padding: EdgeInsets.zero,
-                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-          ],
+        if (active)
+          const SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          )
+        else
+          Icon(
+            Icons.radio_button_unchecked,
+            size: 20,
+            color: Colors.grey.shade600,
+          ),
+        const SizedBox(width: 12),
+        Text(
+          active ? 'Receiving' : 'Idle',
+          style: Theme.of(context).textTheme.bodyLarge,
         ),
       ],
     );
