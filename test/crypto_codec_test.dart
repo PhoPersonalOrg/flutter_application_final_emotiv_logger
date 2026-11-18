@@ -4,6 +4,7 @@ import 'package:encrypt/encrypt.dart';
 import 'package:flutter_emotiv_logger/decode/crypto_codec.dart';
 import 'package:flutter_emotiv_logger/decode/device_identity.dart';
 import 'package:flutter_emotiv_logger/decode/eeg_counter_monitor.dart';
+import 'package:flutter_emotiv_logger/domain/ble_uuids.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Builds a plaintext EEG package: counter, type, then word k = [words][k]
@@ -262,6 +263,48 @@ void main() {
       expect(
         () => resolver.resolveFromName('EPOCX'),
         throwsStateError,
+      );
+    });
+
+    test('isEmotivScanCandidate accepts name, services, or preferred', () {
+      const emotivService = EmotivBleUuids.control;
+
+      expect(
+        resolver.isEmotivScanCandidate(
+          '',
+          serviceUuids: const [emotivService],
+        ),
+        isTrue,
+      );
+      expect(
+        resolver.isEmotivScanCandidate(''),
+        isFalse,
+      );
+      expect(
+        resolver.isEmotivScanCandidate('EPOCX E50202E9'),
+        isTrue,
+      );
+      expect(
+        resolver.isEmotivScanCandidate('Vertuo_DV6_78421CA8FC9A'),
+        isFalse,
+      );
+      expect(
+        resolver.isEmotivScanCandidate('Pixel Buds'),
+        isFalse,
+      );
+      expect(
+        resolver.isEmotivScanCandidate(
+          'Pixel Buds',
+          isPreferred: true,
+        ),
+        isTrue,
+      );
+      expect(
+        resolver.isEmotivScanCandidate(
+          'Vertuo_DV6_78421CA8FC9A',
+          serviceUuids: const [emotivService],
+        ),
+        isTrue,
       );
     });
   });
