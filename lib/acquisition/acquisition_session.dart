@@ -14,10 +14,13 @@ import '../domain/acquisition_state.dart';
 import '../domain/ble_uuids.dart';
 import '../domain/samples.dart';
 import '../sessions/dropbox_sync.dart';
+import '../sessions/live_session_sync.dart';
+import '../sessions/server_bookmark.dart';
 import '../sinks/csv_sink.dart';
 import '../sinks/lsl_sink.dart';
 import '../sinks/network_sink.dart';
 import '../sinks/sample_hub.dart';
+import 'ble_fsm_policy.dart';
 import 'session_subscriptions.dart';
 
 /// Owns the BLE acquisition FSM, decode pipeline, and sinks.
@@ -26,20 +29,30 @@ class AcquisitionSession {
     AppSettings? initialSettings,
     Future<void> Function(AppSettings settings)? persistSettings,
     DropboxSync? dropboxSync,
+    LiveSessionSync? liveSync,
+    Future<BookmarkStoreState> Function()? loadBookmarks,
+    Future<String?> Function(String bookmarkId)? readPassword,
   })  : _settings = initialSettings ?? const AppSettings(),
-        _persistSettings = persistSettings,
-        _dropbox = dropboxSync ?? DropboxSync() {
+        _persistSettings = persistSettings {
     _preferredId = _settings.preferredDeviceId;
     _preferredName = _settings.preferredDeviceName;
     _hub = SampleHub(onHealth: _mutateHealth);
     _csv = CsvSink(hub: _hub);
     _lsl = LslSink(hub: _hub, onHealth: _mutateHealth);
     _network = NetworkSink(hub: _hub, onHealth: _mutateHealth);
+    _liveSync = liveSync ??
+        LiveSessionSync(
+          dropbox: dropboxSync ?? DropboxSync(),
+          loadBookmarks: loadBookmarks ??
+              () async => const BookmarkStoreState(),
+          readPassword: readPassword ?? ((_) async => null),
+          onStatus: _onLiveSyncStatus,
+        );
     _stateController.add(const AcquisitionIdle());
   }
 
   final Future<void> Function(AppSettings settings)? _persistSettings;
-  final DropboxSync _dropbox;
+  late final LiveSessionSync _liveSync;
 
   final _stateController =
       StreamController<AcquisitionState>.broadcast(sync: true);
@@ -51,7 +64,12 @@ class AcquisitionSession {
   late final LslSink _lsl;
   late final NetworkSink _network;
 
-  final _subs = SessionSubscriptions();
+  /// Scan-only listeners (`scanResults`). Never holds link/notify subs.
+  final _scanSubs = SessionSubscriptions();
+
+  /// Connection-state + characteristic notify listeners for an active link.
+  final _linkSubs = SessionSubscriptions();
+
   StreamSubscription? _decodeSub;
   StreamSubscription? _scanActiveSub;
   Timer? _rateTimer;
@@ -72,10 +90,15 @@ class AcquisitionSession {
   bool _acceptPackets = false;
   bool _userStopRequested = false;
   bool _autoConnectPreferred = false;
+  bool _autoConnectClaimed = false;
+  bool _pendingDiscoveredClear = false;
   int _reconnectAttempt = 0;
   int _eegWindow = 0;
   int _motionWindow = 0;
   int? _lastEegMonoUs;
+
+  /// Bumped to invalidate in-flight connect/prepare/reconnect work.
+  int _opEpoch = 0;
 
   Stream<AcquisitionState> get stateStream => _stateController.stream;
   AcquisitionState get state => _state;
@@ -83,6 +106,12 @@ class AcquisitionSession {
   SampleHub get hub => _hub;
   String? get preferredDeviceId => _preferredId;
   String? get preferredDeviceName => _preferredName;
+
+  /// Test/diagnostic: whether link subscriptions are currently held.
+  int get linkSubscriptionCountForTest => _linkSubs.length;
+
+  /// Test/diagnostic: whether scan subscriptions are currently held.
+  int get scanSubscriptionCountForTest => _scanSubs.length;
 
   Future<void> updateSettings(AppSettings settings) async {
     _settings = settings;
@@ -97,19 +126,17 @@ class AcquisitionSession {
   }
 
   Future<void> startScan({bool autoConnectPreferred = false}) async {
-    if (_state is! AcquisitionIdle &&
-        _state is! AcquisitionFailed &&
-        _state is! AcquisitionScanning) {
-      return;
-    }
+    if (!BleFsmPolicy.canStartScan(_state)) return;
+    _bumpEpoch();
     await _cancelReconnect();
     await _stopScanRadio();
-    _discovered.clear();
-    _rssi.clear();
+    // Soft-clear: keep prior devices visible until the first fresh callback.
+    _pendingDiscoveredClear = true;
     _autoConnectPreferred = autoConnectPreferred;
+    _autoConnectClaimed = false;
     _emit(
       AcquisitionScanning(
-        devices: const [],
+        devices: _buildDeviceList(),
         active: true,
         preferredId: _preferredId,
         health: _health,
@@ -121,6 +148,7 @@ class AcquisitionSession {
       if (!adapter) return;
 
       await _seedAlreadyConnected();
+      _publishScanDevices(clearError: true);
 
       await FlutterBluePlus.startScan(
         withServices: [
@@ -141,21 +169,39 @@ class AcquisitionSession {
         }
       });
 
-      _subs.add(
+      _scanSubs.add(
         FlutterBluePlus.scanResults.listen((results) {
-          for (final r in results) {
-            _considerScanResult(r.device, r.rssi);
+          if (_pendingDiscoveredClear) {
+            _discovered.clear();
+            _rssi.clear();
+            _pendingDiscoveredClear = false;
+            try {
+              for (final d in FlutterBluePlus.connectedDevices) {
+                _considerScanResult(
+                  d,
+                  _rssi[d.remoteId.str] ?? 0,
+                );
+              }
+            } catch (_) {}
           }
-          _publishScanDevices();
+          for (final r in results) {
+            _considerScanResult(
+              r.device,
+              r.rssi,
+              advName: r.advertisementData.advName,
+              serviceUuids: r.advertisementData.serviceUuids,
+            );
+          }
+          _publishScanDevices(clearError: true);
           if (_autoConnectPreferred) {
             unawaited(_tryAutoConnectPreferred());
           }
         }),
       );
-      _publishScanDevices();
+      _publishScanDevices(clearError: true);
     } catch (e) {
       await _stopScanRadio();
-      _emit(AcquisitionFailed(message: 'Scan failed: $e', health: _health));
+      _emitToScanningWithError('Scan failed: $e');
     }
   }
 
@@ -166,6 +212,8 @@ class AcquisitionSession {
       await startScan();
       return;
     }
+    if (!BleFsmPolicy.canConnect(_state)) return;
+
     await _seedAlreadyConnected();
     final known = _discovered[id];
     if (known != null) {
@@ -178,6 +226,8 @@ class AcquisitionSession {
   Future<void> stopScan() async {
     await _stopScanRadio();
     _autoConnectPreferred = false;
+    _autoConnectClaimed = false;
+    _pendingDiscoveredClear = false;
     if (_state is AcquisitionScanning) {
       final current = _state as AcquisitionScanning;
       _emit(current.copyWith(active: false));
@@ -185,29 +235,30 @@ class AcquisitionSession {
   }
 
   Future<void> connect(String deviceId) async {
+    if (!BleFsmPolicy.canConnect(_state)) return;
+
     final device = _discovered[deviceId];
     if (device == null) {
-      _emit(
-        AcquisitionFailed(
-          message: 'Unknown device id: $deviceId',
-          health: _health,
-        ),
-      );
+      _emitToScanningWithError('Unknown device id: $deviceId');
       return;
     }
     _preferredId = deviceId;
     _preferredName = device.platformName;
     _autoConnectPreferred = false;
+    _autoConnectClaimed = false;
     _userStopRequested = false;
     _reconnectAttempt = 0;
+    final epoch = _bumpEpoch();
     await _stopScanRadio();
-    await _connectDevice(device);
+    await _connectDevice(device, epoch: epoch);
   }
 
   Future<void> disconnect() async {
     _userStopRequested = true;
+    _bumpEpoch();
     await _cancelReconnect();
     await _orderedTeardown(disconnectBle: true);
+    _mutateHealth((h) => h.copyWith(clearBatteryPercent: true));
     _emit(AcquisitionIdle(health: _health));
   }
 
@@ -223,15 +274,25 @@ class AcquisitionSession {
 
   Future<void> dispose() async {
     _userStopRequested = true;
+    _bumpEpoch();
     await _cancelReconnect();
     await _stopScanRadio();
     await _orderedTeardown(disconnectBle: true);
+    await _liveSync.dispose();
     await _decode.dispose();
     await _hub.dispose();
     await _stateController.close();
   }
 
-  Future<void> _connectDevice(BluetoothDevice device) async {
+  int _bumpEpoch() => ++_opEpoch;
+
+  bool _isEpochCurrent(int epoch) => epoch == _opEpoch;
+
+  Future<void> _connectDevice(
+    BluetoothDevice device, {
+    required int epoch,
+  }) async {
+    if (!_isEpochCurrent(epoch)) return;
     _emit(
       AcquisitionConnecting(
         deviceName: device.platformName,
@@ -239,21 +300,43 @@ class AcquisitionSession {
       ),
     );
     try {
+      // Drop any half-open OS link before a fresh connect attempt.
+      try {
+        await device.disconnect();
+      } catch (_) {}
+      if (!_isEpochCurrent(epoch)) return;
+
       await device.connect(
         timeout: const Duration(seconds: 15),
         license: License.nonprofit,
       );
+      if (!_isEpochCurrent(epoch)) {
+        try {
+          await device.disconnect();
+        } catch (_) {}
+        return;
+      }
       _device = device;
-      await _prepareAndStream(device);
-    } catch (e) {
-      await _subs.cancelAll();
-      _emit(
-        AcquisitionFailed(message: 'Connect failed: $e', health: _health),
+      await _prepareAndStream(
+        device,
+        epoch: epoch,
+        resumeReconnectOnFailure: false,
       );
+    } catch (e) {
+      if (!_isEpochCurrent(epoch)) return;
+      await _forceDisconnect(device);
+      await _linkSubs.cancelAll();
+      _device = null;
+      _emitToScanningWithError('Connect failed: $e');
     }
   }
 
-  Future<void> _prepareAndStream(BluetoothDevice device) async {
+  Future<void> _prepareAndStream(
+    BluetoothDevice device, {
+    required int epoch,
+    required bool resumeReconnectOnFailure,
+  }) async {
+    if (!_isEpochCurrent(epoch)) return;
     final name = device.platformName;
     _emit(
       AcquisitionPreparing(
@@ -265,22 +348,16 @@ class AcquisitionSession {
 
     try {
       await _decode.start();
+      if (!_isEpochCurrent(epoch)) return;
       _decode.resetSession();
       _mutateHealth((h) => h.copyWith(clearDecodeMessage: true));
       await _decodeSub?.cancel();
       _decodeSub = _decode.results.listen(_onDecodeResult);
 
-      _subs.add(
-        device.connectionState.listen((s) {
-          if (s == BluetoothConnectionState.disconnected) {
-            unawaited(_onLinkLost());
-          }
-        }),
-      );
-
       // Discover + config/serial extract must happen before CSV/LSL so identity
       // can fall back to DIS serial when the advertising name is incomplete.
       await _armNotifications(device);
+      if (!_isEpochCurrent(epoch)) return;
 
       _identity ??= _identityResolver.resolveFromName(name);
       _keyBytes = _identity!.keyBytes;
@@ -288,10 +365,12 @@ class AcquisitionSession {
         id: device.remoteId.str,
         name: _identity!.deviceName,
       );
+      if (!_isEpochCurrent(epoch)) return;
 
       // CSV is first-class but must never abort BLE arming.
       var sessionPath = '';
       try {
+        await _liveSync.stop(timeout: const Duration(seconds: 5));
         final csvStart = await _csv.startSession(
           saveDirectory: _settings.saveDirectory,
           identity: _identity!,
@@ -302,6 +381,13 @@ class AcquisitionSession {
             csvSessionPath: csvStart.sessionPath,
             csvMessage: csvStart.message,
             csvUsingFallback: csvStart.usedFallback,
+          ),
+        );
+        unawaited(
+          _liveSync.start(
+            sessionPath: sessionPath,
+            settings: _settings,
+            flushCsv: _csv.flush,
           ),
         );
       } catch (e) {
@@ -321,11 +407,23 @@ class AcquisitionSession {
         settings: _settings,
         deviceId: _identity!.btKeyHex,
       );
+      if (!_isEpochCurrent(epoch)) return;
 
       _acceptPackets = true;
       _reconnectAttempt = 0;
       _startRateMonitor();
 
+      // Arm link-lost only after Streaming is established so prepare races
+      // cannot start reconnect while discovery is still running.
+      _linkSubs.add(
+        device.connectionState.listen((s) {
+          if (s == BluetoothConnectionState.disconnected) {
+            unawaited(_onLinkLost());
+          }
+        }),
+      );
+
+      if (!_isEpochCurrent(epoch)) return;
       _emit(
         AcquisitionStreaming(
           deviceName: name.isEmpty ? _identity!.deviceName : name,
@@ -336,10 +434,15 @@ class AcquisitionSession {
         ),
       );
     } catch (e) {
+      if (!_isEpochCurrent(epoch)) return;
       await _orderedTeardown(disconnectBle: true);
-      _emit(
-        AcquisitionFailed(message: 'Prepare failed: $e', health: _health),
-      );
+      if (resumeReconnectOnFailure && !_userStopRequested) {
+        await _beginReconnectAttempt(
+          name: name.isEmpty ? (_preferredName ?? 'device') : name,
+        );
+        return;
+      }
+      _emitToScanningWithError('Prepare failed: $e');
     }
   }
 
@@ -350,6 +453,7 @@ class AcquisitionSession {
     BluetoothCharacteristic? serviceBControl;
     BluetoothCharacteristic? headsetConfigChar;
     BluetoothCharacteristic? disSerialChar;
+    BluetoothCharacteristic? batteryChar;
 
     for (final service in services) {
       for (final c in service.characteristics) {
@@ -365,6 +469,8 @@ class AcquisitionSession {
           serviceBControl = c;
         } else if (EmotivBleUuids.isHeadsetConfig(id)) {
           headsetConfigChar = c;
+        } else if (EmotivBleUuids.isBatteryLevel(id)) {
+          batteryChar = c;
         } else if (_isDisSerial(id)) {
           disSerialChar = c;
         }
@@ -417,7 +523,7 @@ class AcquisitionSession {
     }
 
     await eegChar.setNotifyValue(true);
-    _subs.add(
+    _linkSubs.add(
       eegChar.lastValueStream.listen((data) {
         if (!_acceptPackets || data.isEmpty) return;
         _enqueueRaw(PacketKind.eeg, data);
@@ -426,7 +532,7 @@ class AcquisitionSession {
 
     if (motionChar != null) {
       await motionChar.setNotifyValue(true);
-      _subs.add(
+      _linkSubs.add(
         motionChar.lastValueStream.listen((data) {
           if (!_acceptPackets || data.isEmpty) return;
           _enqueueRaw(PacketKind.motion, data);
@@ -434,8 +540,31 @@ class AcquisitionSession {
       );
     }
 
+    // Battery Level (`0x2A19`): optional BAS notify; missing is non-fatal.
+    if (batteryChar != null) {
+      try {
+        final initial = await batteryChar.read();
+        _applyBatteryPayload(initial);
+      } catch (_) {}
+      try {
+        await batteryChar.setNotifyValue(true);
+        _linkSubs.add(
+          batteryChar.lastValueStream.listen((data) {
+            _applyBatteryPayload(data);
+          }),
+        );
+      } catch (_) {}
+    }
+
     // Enabling notifications is all that starts the stream; the official app
     // writes nothing to the EEG or motion characteristics.
+  }
+
+  void _applyBatteryPayload(List<int> data) {
+    final percent = EmotivBleUuids.parseBatteryPercent(data);
+    if (percent == null) return;
+    _mutateHealth((h) => h.copyWith(batteryPercent: percent));
+    _refreshStreamingHealth();
   }
 
   void _enqueueRaw(PacketKind kind, List<int> data) {
@@ -530,21 +659,34 @@ class AcquisitionSession {
 
   Future<void> _onLinkLost() async {
     if (_userStopRequested) return;
-    if (_state is AcquisitionStopping ||
-        _state is AcquisitionIdle ||
-        _state is AcquisitionFailed) {
-      return;
-    }
+    // Only Streaming / Reconnecting may start recovery — never during
+    // Connecting / Preparing (avoids overlapping teardown + reconnect).
+    if (!BleFsmPolicy.canHandleLinkLost(_state)) return;
 
+    final epoch = _bumpEpoch();
     final name = _preferredName ?? _device?.platformName ?? 'device';
     _acceptPackets = false;
     await _orderedTeardown(disconnectBle: false);
+    if (!_isEpochCurrent(epoch)) return;
+
+    await _beginReconnectAttempt(name: name, epoch: epoch);
+  }
+
+  /// Shared reconnect backoff entry used by link-lost and prepare failures.
+  Future<void> _beginReconnectAttempt({
+    required String name,
+    int? epoch,
+  }) async {
+    if (_userStopRequested) return;
+    final currentEpoch = epoch ?? _bumpEpoch();
+    if (!_isEpochCurrent(currentEpoch)) return;
 
     _reconnectAttempt++;
     if (_reconnectAttempt > 8) {
       _emit(
         AcquisitionFailed(
-          message: 'Gave up reconnecting to $name after $_reconnectAttempt attempts',
+          message:
+              'Gave up reconnecting to $name after $_reconnectAttempt attempts',
           health: _health.copyWith(reconnectAttempt: _reconnectAttempt),
         ),
       );
@@ -564,49 +706,128 @@ class AcquisitionSession {
 
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(delay, () async {
-      if (_userStopRequested) return;
-      BluetoothDevice? device = _device;
-      final id = _preferredId;
-      if (id != null && _discovered.containsKey(id)) {
-        device = _discovered[id];
+      if (_userStopRequested || !_isEpochCurrent(currentEpoch)) return;
+      await _attemptReconnect(epoch: currentEpoch);
+    });
+  }
+
+  Future<void> _attemptReconnect({required int epoch}) async {
+    if (!_isEpochCurrent(epoch) || _userStopRequested) return;
+
+    final id = _preferredId;
+    BluetoothDevice? device;
+    if (id != null && _discovered.containsKey(id)) {
+      device = _discovered[id];
+    } else {
+      device = _device;
+    }
+
+    // Prefer a listened rediscovery so stale cached peripherals are refreshed.
+    if (id != null) {
+      final found = await _scanForPreferred(
+        id: id,
+        name: _preferredName,
+        timeout: const Duration(seconds: 8),
+      );
+      if (!_isEpochCurrent(epoch) || _userStopRequested) return;
+      if (found != null) {
+        device = found;
       }
-      if (device == null && id != null) {
+    }
+
+    if (device == null) {
+      await _beginReconnectAttempt(
+        name: _preferredName ?? 'device',
+        epoch: epoch,
+      );
+      return;
+    }
+
+    try {
+      try {
+        await device.disconnect();
+      } catch (_) {}
+      if (!_isEpochCurrent(epoch) || _userStopRequested) return;
+
+      await device.connect(
+        timeout: const Duration(seconds: 15),
+        license: License.nonprofit,
+      );
+      if (!_isEpochCurrent(epoch) || _userStopRequested) {
         try {
-          await FlutterBluePlus.startScan(
-            withServices: [
-              Guid(EmotivBleUuids.control),
-              Guid(EmotivBleUuids.serviceB),
-            ],
-            timeout: const Duration(seconds: 8),
-            androidUsesFineLocation: true,
-          );
-          await Future<void>.delayed(const Duration(seconds: 2));
-          for (final r in FlutterBluePlus.lastScanResults) {
-            _considerScanResult(r.device, r.rssi);
-            if (r.device.remoteId.str == id ||
-                r.device.platformName == _preferredName) {
-              device = r.device;
-              break;
-            }
-          }
-          await FlutterBluePlus.stopScan();
+          await device.disconnect();
         } catch (_) {}
-      }
-      if (device == null) {
-        unawaited(_onLinkLost());
         return;
       }
-      try {
-        await device.connect(
-          timeout: const Duration(seconds: 15),
-          license: License.nonprofit,
-        );
-        _device = device;
-        await _prepareAndStream(device);
-      } catch (_) {
-        unawaited(_onLinkLost());
-      }
-    });
+      _device = device;
+      await _prepareAndStream(
+        device,
+        epoch: epoch,
+        resumeReconnectOnFailure: true,
+      );
+    } catch (_) {
+      if (!_isEpochCurrent(epoch)) return;
+      await _beginReconnectAttempt(
+        name: _preferredName ?? device.platformName,
+        epoch: epoch,
+      );
+    }
+  }
+
+  /// Listened scan for a preferred peripheral; returns the device when found.
+  Future<BluetoothDevice?> _scanForPreferred({
+    required String id,
+    String? name,
+    required Duration timeout,
+  }) async {
+    await _stopScanRadio();
+    final completer = Completer<BluetoothDevice?>();
+    Timer? timeoutTimer;
+
+    void completeOnce(BluetoothDevice? device) {
+      if (completer.isCompleted) return;
+      timeoutTimer?.cancel();
+      completer.complete(device);
+    }
+
+    try {
+      _scanSubs.add(
+        FlutterBluePlus.scanResults.listen((results) {
+          for (final r in results) {
+            _considerScanResult(
+              r.device,
+              r.rssi,
+              advName: r.advertisementData.advName,
+              serviceUuids: r.advertisementData.serviceUuids,
+            );
+            final matchId = r.device.remoteId.str == id;
+            final matchName =
+                name != null && name.isNotEmpty && r.device.platformName == name;
+            if (matchId || matchName) {
+              completeOnce(r.device);
+              return;
+            }
+          }
+        }),
+      );
+
+      await FlutterBluePlus.startScan(
+        withServices: [
+          Guid(EmotivBleUuids.control),
+          Guid(EmotivBleUuids.serviceB),
+        ],
+        timeout: timeout,
+        androidUsesFineLocation: true,
+      );
+
+      timeoutTimer = Timer(timeout, () => completeOnce(null));
+      final found = await completer.future;
+      await _stopScanRadio();
+      return found;
+    } catch (_) {
+      await _stopScanRadio();
+      return null;
+    }
   }
 
   Duration _backoff(int attempt) {
@@ -665,20 +886,42 @@ class AcquisitionSession {
         _considerScanResult(d, _rssi[d.remoteId.str] ?? 0);
       }
     } catch (_) {}
+
+    try {
+      final withServices = await FlutterBluePlus.systemDevices([
+        Guid(EmotivBleUuids.control),
+        Guid(EmotivBleUuids.serviceB),
+      ]);
+      for (final d in withServices) {
+        // Windows systemDevices ignores withServices; require name/preferred.
+        _considerScanResult(d, _rssi[d.remoteId.str] ?? 0);
+      }
+    } catch (_) {}
   }
 
-  void _considerScanResult(BluetoothDevice device, int rssi) {
-    final name = device.platformName;
+  void _considerScanResult(
+    BluetoothDevice device,
+    int rssi, {
+    String? advName,
+    List<Guid> serviceUuids = const [],
+  }) {
     final id = device.remoteId.str;
-    final parsed = name.isEmpty
-        ? null
-        : _identityResolver.tryParseAdvertisement(name);
+    final platformName = device.platformName.trim();
+    final resolvedAdv = (advName ?? '').trim();
+    final name = platformName.isNotEmpty ? platformName : resolvedAdv;
     final isPreferred = id == _preferredId ||
-        (_preferredName != null && name == _preferredName);
+        (_preferredName != null &&
+            name.isNotEmpty &&
+            name == _preferredName);
 
-    // Keep service-filtered hits even when the local name is empty (common on
-    // some Android stacks until GAP name is read); prefer parseable Emotiv names.
-    if (name.isNotEmpty && parsed == null && !isPreferred) {
+    final candidate = _identityResolver.isEmotivScanCandidate(
+      name,
+      serviceUuids: serviceUuids.map((g) => g.str),
+      isPreferred: isPreferred,
+    );
+    if (!candidate) {
+      _discovered.remove(id);
+      _rssi.remove(id);
       return;
     }
 
@@ -688,9 +931,7 @@ class AcquisitionSession {
     }
   }
 
-  void _publishScanDevices() {
-    if (_state is! AcquisitionScanning) return;
-    final current = _state as AcquisitionScanning;
+  List<DiscoveredDevice> _buildDeviceList() {
     final devices = _discovered.entries.map((e) {
       final name = e.value.platformName;
       final parsed = _identityResolver.tryParseAdvertisement(name);
@@ -711,35 +952,63 @@ class AcquisitionSession {
         final br = b.rssi ?? -999;
         return br.compareTo(ar);
       });
+    return devices;
+  }
+
+  void _publishScanDevices({bool clearError = false}) {
+    if (_state is! AcquisitionScanning) return;
+    final current = _state as AcquisitionScanning;
     _emit(
       current.copyWith(
-        devices: devices,
+        devices: _buildDeviceList(),
         preferredId: _preferredId,
+        clearErrorMessage: clearError,
+        health: _health,
+      ),
+    );
+  }
+
+  void _emitToScanningWithError(String message) {
+    _emit(
+      AcquisitionScanning(
+        devices: _buildDeviceList(),
+        active: false,
+        preferredId: _preferredId,
+        errorMessage: message,
         health: _health,
       ),
     );
   }
 
   Future<void> _tryAutoConnectPreferred() async {
-    if (!_autoConnectPreferred) return;
+    if (!BleFsmPolicy.claimAutoConnect(
+      enabled: _autoConnectPreferred,
+      alreadyClaimed: _autoConnectClaimed,
+    )) {
+      return;
+    }
+    if (!BleFsmPolicy.canConnect(_state)) return;
     final id = _preferredId;
     if (id == null) return;
-    if (!_discovered.containsKey(id)) {
-      if (_preferredName == null) return;
-      String? match;
+
+    String? targetId;
+    if (_discovered.containsKey(id)) {
+      targetId = id;
+    } else if (_preferredName != null) {
       for (final e in _discovered.entries) {
         if (e.value.platformName == _preferredName) {
-          match = e.key;
+          targetId = e.key;
           break;
         }
       }
-      if (match == null) return;
-      _autoConnectPreferred = false;
-      await connect(match);
-      return;
     }
+    if (targetId == null) return;
+
+    // Synchronous claim before any await so concurrent scanResults cannot
+    // start a second connect.
+    _autoConnectClaimed = true;
     _autoConnectPreferred = false;
-    await connect(id);
+    await connect(targetId);
   }
 
   Future<void> _stopScanRadio() async {
@@ -748,8 +1017,16 @@ class AcquisitionSession {
     } catch (_) {}
     await _scanActiveSub?.cancel();
     _scanActiveSub = null;
-    // Cancel scan-result listeners only; keep connection/notify subs intact.
-    await _subs.cancelAll();
+    // Cancel scan-result listeners only; keep link/notify subs intact.
+    await _scanSubs.cancelAll();
+  }
+
+  Future<void> _forceDisconnect(BluetoothDevice? device) async {
+    final target = device ?? _device;
+    if (target == null) return;
+    try {
+      await target.disconnect();
+    } catch (_) {}
   }
 
   Future<void> _rememberPreferred({
@@ -783,19 +1060,23 @@ class AcquisitionSession {
       _emit(AcquisitionStopping(deviceName: name, health: _health));
     }
 
-    final sessionPath = _csv.sessionPath ?? _health.csvSessionPath;
-    final shouldAutoUploadDropbox =
-        disconnectBle && _userStopRequested && _settings.dropboxAutoUpload;
-
     _acceptPackets = false;
     _rateTimer?.cancel();
     _rateTimer = null;
-    await _subs.cancelAll();
+    await _scanSubs.cancelAll();
+    await _linkSubs.cancelAll();
     await _decodeSub?.cancel();
     _decodeSub = null;
 
     try {
       await _csv.stop();
+    } catch (_) {}
+    try {
+      await _liveSync.stop(
+        timeout: disconnectBle
+            ? const Duration(seconds: 45)
+            : const Duration(seconds: 15),
+      );
     } catch (_) {}
     try {
       await _lsl.stop();
@@ -808,39 +1089,31 @@ class AcquisitionSession {
     _lastEegMonoUs = null;
 
     if (disconnectBle) {
-      try {
-        await _device?.disconnect();
-      } catch (_) {}
+      await _forceDisconnect(_device);
       _device = null;
-    }
-
-    if (shouldAutoUploadDropbox) {
-      unawaited(_autoUploadDropbox(sessionPath));
+      _mutateHealth((h) => h.copyWith(clearBatteryPercent: true));
     }
   }
 
-  Future<void> _autoUploadDropbox(String? sessionPath) async {
+  void _onLiveSyncStatus(String? message) {
     _mutateHealth(
-      (h) => h.copyWith(dropboxMessage: 'Dropbox: uploading…'),
+      (h) => message == null
+          ? h.copyWith(clearSyncMessage: true)
+          : h.copyWith(syncMessage: message),
     );
-    if (_state is AcquisitionIdle) {
+    final s = _state;
+    if (s is AcquisitionStreaming) {
+      _emit(
+        AcquisitionStreaming(
+          deviceName: s.deviceName,
+          sessionDir: s.sessionDir,
+          health: _health,
+        ),
+      );
+    } else if (s is AcquisitionIdle) {
       _emit(AcquisitionIdle(health: _health));
-    }
-
-    final ok = await _dropbox.tryAutoUpload(
-      sessionPath,
-      enabled: true,
-      remoteRoot: _settings.dropboxRemoteRoot,
-    );
-    _mutateHealth(
-      (h) => h.copyWith(
-        dropboxMessage: ok
-            ? 'Dropbox: uploaded'
-            : 'Dropbox: ${_dropbox.lastError ?? 'upload failed'}',
-      ),
-    );
-    if (_state is AcquisitionIdle) {
-      _emit(AcquisitionIdle(health: _health));
+    } else if (s is AcquisitionStopping) {
+      _emit(AcquisitionStopping(deviceName: s.deviceName, health: _health));
     }
   }
 

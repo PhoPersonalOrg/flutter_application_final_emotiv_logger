@@ -60,5 +60,6 @@ void main() {
     expect(decoded.single.protocol, TransferProtocol.smb);
     expect(decoded.single.smbShare, 'data');
     expect(decoded.single.rememberPassword, isTrue);
+    expect(decoded.single.liveSync, isTrue);
   });
 }

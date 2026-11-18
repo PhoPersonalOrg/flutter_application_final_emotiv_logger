@@ -24,7 +24,6 @@ class EegSample {
     required this.values,
     required this.receiveMonoUs,
     required this.wallClock,
-    this.contactQuality = 0,
   });
 
   static const channelNames = [
@@ -50,7 +49,6 @@ class EegSample {
   final List<double> values;
   final int receiveMonoUs;
   final DateTime wallClock;
-  final int contactQuality;
 }
 
 /// Parsed 10-channel motion sample: orientation quaternion, accelerometer (g)

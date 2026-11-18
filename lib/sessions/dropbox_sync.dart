@@ -21,13 +21,22 @@ class DropboxSync {
   static bool _initialized = false;
   String? lastError;
 
+  /// `dropbox_client` ships Android/iOS only — skip on desktop.
+  static bool get isSupported => Platform.isAndroid || Platform.isIOS;
+
   static Future<void> initIfConfigured() async {
-    if (!DropboxConfig.isConfigured || _initialized) return;
+    if (!DropboxConfig.isConfigured || _initialized || !isSupported) return;
     await Dropbox.init(DropboxConfig.clientId, DropboxConfig.appKey);
     _initialized = true;
   }
 
   void _requireConfigured() {
+    if (!isSupported) {
+      throw StateError(
+        'Dropbox sync is only available on Android and iOS '
+        '(dropbox_client has no Windows/desktop plugin).',
+      );
+    }
     if (!DropboxConfig.isConfigured) {
       throw StateError(
         'Dropbox app key missing. Rebuild with '
@@ -38,7 +47,7 @@ class DropboxSync {
   }
 
   Future<bool> isLinked() async {
-    if (!DropboxConfig.isConfigured) return false;
+    if (!isSupported || !DropboxConfig.isConfigured) return false;
     await initIfConfigured();
     final live = await Dropbox.getCredentials();
     if (live != null && live.isNotEmpty) {
@@ -209,6 +218,10 @@ class DropboxSync {
     String remoteRoot = defaultRemoteRoot,
   }) async {
     if (!enabled || sessionPath == null || sessionPath.isEmpty) {
+      return false;
+    }
+    if (!isSupported) {
+      lastError = 'Dropbox not supported on this platform';
       return false;
     }
     if (!DropboxConfig.isConfigured) {

@@ -35,6 +35,7 @@ class AcquisitionScanning extends AcquisitionState {
     required this.devices,
     this.active = true,
     this.preferredId,
+    this.errorMessage,
     this.health = const AcquisitionHealth(),
   });
 
@@ -47,6 +48,9 @@ class AcquisitionScanning extends AcquisitionState {
   /// Last successfully used device id, if any (for UI highlight).
   final String? preferredId;
 
+  /// Soft error from a failed connect/prepare; list stays usable for retry.
+  final String? errorMessage;
+
   @override
   final AcquisitionHealth health;
 
@@ -57,12 +61,16 @@ class AcquisitionScanning extends AcquisitionState {
     List<DiscoveredDevice>? devices,
     bool? active,
     String? preferredId,
+    String? errorMessage,
+    bool clearErrorMessage = false,
     AcquisitionHealth? health,
   }) {
     return AcquisitionScanning(
       devices: devices ?? this.devices,
       active: active ?? this.active,
       preferredId: preferredId ?? this.preferredId,
+      errorMessage:
+          clearErrorMessage ? null : (errorMessage ?? this.errorMessage),
       health: health ?? this.health,
     );
   }
