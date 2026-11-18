@@ -18,17 +18,33 @@ Explicit states: `Idle → Scanning → Connecting → Preparing → Streaming`,
 
 ## Session files
 
-Each connect creates:
+Each connect creates (CSV/`raw.csv` is **always on** when the session folder opens — no toggle). On iOS the folder is under app Documents.
 
 ```
 {saveDir}/session_{iso}/
-  session.json   # device name, key fingerprint, rates
+  session.json   # device_id, app_version_name, startedAt, gps, deviceName, btKeyHex, …
   eeg.csv        # wall_ms, mono_us, AF3…AF4
   motion.csv     # wall_ms, mono_us, Q0…Q3, AccX/Y/Z, MagX/Y/Z
-  raw.csv        # wall_ms, mono_us, kind, bytes
+  raw.csv        # wall_ms, mono_us, kind, char_uuid, bytes
 ```
 
+`raw.csv` stores undecrypted BLE notify payloads **before** length/kind gates used for live decode. `kind` is advisory (from the subscribed characteristic); `char_uuid` is the GATT UUID; `bytes` are space-separated decimals. Short or misclassified packets are still written so they can be re-decoded offline.
+
 Timestamps are receive-time (headset clock is not available on this BLE path).
+
+### Offline re-decode
+
+After transferring a session folder, use emotiv-lsl:
+
+```bash
+cd ../ACTIVE_DEV/emotiv-lsl
+.venv/bin/python scripts/decode_flutter_raw_csv.py /path/to/session_…
+# optional replay dump:
+.venv/bin/python scripts/decode_flutter_raw_csv.py /path/to/session_… \
+  -o /path/to/session_…/replay.epocxwire
+```
+
+That writes `eeg_offline.csv` / `motion_offline.csv` (classification by payload length) and can emit `.epocxwire` for `main.py --replay`.
 
 ## Sessions tab (transfer)
 
