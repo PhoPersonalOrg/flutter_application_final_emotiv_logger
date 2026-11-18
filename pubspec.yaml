@@ -47,6 +47,8 @@ dependencies:
   nsd: ^5.0.1
   dropbox_client: ^1.2.2
   http: ^1.6.0
+  package_info_plus: ^10.2.2
+  geolocator: ^14.1.2
 
 dev_dependencies:
   flutter_test:

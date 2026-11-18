@@ -35,6 +35,8 @@
 	<string>This app needs Bluetooth access to connect to Emotiv EEG devices</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>This app needs Bluetooth access to connect to Emotiv EEG devices</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>This app records an approximate GPS location at the start of each EEG session for later analysis.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>This app needs local network access to discover SMB servers for session transfer and data streams.</string>
 	<key>NSBonjourServices</key>

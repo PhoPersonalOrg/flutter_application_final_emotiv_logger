@@ -5,8 +5,10 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 
 import '../app/save_directory_policy.dart';
+import '../decode/crypto_codec.dart';
 import '../decode/device_identity.dart';
 import '../domain/samples.dart';
+import 'recorder_identity.dart';
 import 'sample_hub.dart';
 
 /// Result of opening a session directory for CSV/raw logging.
@@ -43,6 +45,7 @@ class CsvSink {
   Future<CsvSessionStart> startSession({
     required String? saveDirectory,
     required DeviceIdentity identity,
+    int eegResolutionBits = CryptoCodec.defaultEegResolutionBits,
   }) async {
     await stop();
     _closed = false;
@@ -53,7 +56,11 @@ class CsvSink {
     Object? customError;
     if (preferred != null) {
       try {
-        final path = await _openUnder(Directory(preferred), identity);
+        final path = await _openUnder(
+          Directory(preferred),
+          identity,
+          eegResolutionBits: eegResolutionBits,
+        );
         return CsvSessionStart(
           sessionPath: path,
           usedFallback: false,
@@ -66,7 +73,11 @@ class CsvSink {
 
     final docs = await getApplicationDocumentsDirectory();
     try {
-      final path = await _openUnder(docs, identity);
+      final path = await _openUnder(
+        docs,
+        identity,
+        eegResolutionBits: eegResolutionBits,
+      );
       final msg = customError == null
           ? 'CSV writing to app documents: $path'
           : 'CSV using app documents (custom path denied: $customError)';
@@ -83,21 +94,33 @@ class CsvSink {
     }
   }
 
-  Future<String> _openUnder(Directory base, DeviceIdentity identity) async {
+  Future<String> _openUnder(
+    Directory base,
+    DeviceIdentity identity, {
+    required int eegResolutionBits,
+  }) async {
     if (!await base.exists()) {
       await base.create(recursive: true);
     }
     await _probeWritable(base);
 
-    final stamp = DateTime.now().toIso8601String().replaceAll(':', '-');
+    final startedAt = DateTime.now();
+    final stamp = startedAt.toIso8601String().replaceAll(':', '-');
     final sessionDir = Directory('${base.path}/session_$stamp');
     await sessionDir.create(recursive: true);
 
-    final meta = {
+    final recorder = await resolveRecorderIdentity();
+    final meta = <String, Object?>{
       'deviceName': identity.deviceName,
+      'device_id': recorder.deviceId,
+      'app_version_name': recorder.appVersionName,
+      'startedAt': startedAt.toIso8601String(),
+      'gps': recorder.gps,
+      'gps_status': recorder.gpsStatus ?? 'unavailable',
       'btKeyHex': identity.btKeyHex,
+      'serialSource': 'ble_hex',
       'keyFingerprint': identity.keyFingerprint,
-      'startedAt': DateTime.now().toIso8601String(),
+      'eegResolutionBits': eegResolutionBits,
       'eegRateHz': EegSample.nominalRateHz,
       'motionRateHz': MotionSample.nominalRateHz,
       'eegChannels': EegSample.channelNames,
@@ -117,7 +140,7 @@ class CsvSink {
     );
 
     _raw = File('${sessionDir.path}/raw.csv').openWrite();
-    _raw!.writeln('wall_ms,mono_us,kind,bytes');
+    _raw!.writeln('wall_ms,mono_us,kind,char_uuid,bytes');
 
     _flushTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       unawaited(flush());
@@ -147,8 +170,9 @@ class CsvSink {
       );
     }
     for (final p in hub.takeCsvRaw()) {
+      final uuid = p.characteristicUuid ?? '';
       _raw?.writeln(
-        '${p.wallClock.millisecondsSinceEpoch},${p.receiveMonoUs},${p.kind.name},${p.bytes.join(' ')}',
+        '${p.wallClock.millisecondsSinceEpoch},${p.receiveMonoUs},${p.kind.name},$uuid,${p.bytes.join(' ')}',
       );
     }
   }
