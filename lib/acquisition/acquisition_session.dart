@@ -374,6 +374,7 @@ class AcquisitionSession {
         final csvStart = await _csv.startSession(
           saveDirectory: _settings.saveDirectory,
           identity: _identity!,
+          eegResolutionBits: _eegResolutionBits,
         );
         sessionPath = csvStart.sessionPath;
         _mutateHealth(
@@ -522,20 +523,26 @@ class AcquisitionSession {
       } catch (_) {}
     }
 
+    final eegUuid = eegChar.uuid.toString();
     await eegChar.setNotifyValue(true);
     _linkSubs.add(
       eegChar.lastValueStream.listen((data) {
         if (!_acceptPackets || data.isEmpty) return;
-        _enqueueRaw(PacketKind.eeg, data);
+        _enqueueRaw(PacketKind.eeg, data, characteristicUuid: eegUuid);
       }),
     );
 
     if (motionChar != null) {
+      final motionUuid = motionChar.uuid.toString();
       await motionChar.setNotifyValue(true);
       _linkSubs.add(
         motionChar.lastValueStream.listen((data) {
           if (!_acceptPackets || data.isEmpty) return;
-          _enqueueRaw(PacketKind.motion, data);
+          _enqueueRaw(
+            PacketKind.motion,
+            data,
+            characteristicUuid: motionUuid,
+          );
         }),
       );
     }
@@ -567,16 +574,14 @@ class AcquisitionSession {
     _refreshStreamingHealth();
   }
 
-  void _enqueueRaw(PacketKind kind, List<int> data) {
+  void _enqueueRaw(
+    PacketKind kind,
+    List<int> data, {
+    required String characteristicUuid,
+  }) {
+    // Always capture non-empty notify payloads for offline re-decode, even
+    // when length/kind gates would reject live decode.
     final bytes = Uint8List.fromList(data);
-    if (kind == PacketKind.eeg && bytes.length < EmotivBleUuids.eegMinBytes) {
-      return;
-    }
-    if (kind == PacketKind.motion &&
-        bytes.length < EmotivBleUuids.motionMinBytes) {
-      return;
-    }
-
     final now = DateTime.now();
     // Headset clock is unavailable over BLE; wall + us is the receive timeline.
     final monoUs = now.microsecondsSinceEpoch;
@@ -585,11 +590,16 @@ class AcquisitionSession {
       bytes: bytes,
       receiveMonoUs: monoUs,
       wallClock: now,
+      characteristicUuid: characteristicUuid,
     );
 
     _hub.publishRaw(packet);
+
     final key = _keyBytes;
-    if (key != null) {
+    final longEnough = kind == PacketKind.eeg
+        ? bytes.length >= EmotivBleUuids.eegMinBytes
+        : bytes.length >= EmotivBleUuids.motionMinBytes;
+    if (key != null && longEnough) {
       _decode.submit(
         packet,
         keyBytes: key,

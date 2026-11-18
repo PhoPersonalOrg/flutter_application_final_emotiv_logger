@@ -4,18 +4,25 @@ import 'dart:typed_data';
 enum PacketKind { eeg, motion }
 
 /// Raw BLE payload captured on the notify callback (no decrypt).
+///
+/// [kind] is advisory (from the subscribed GATT characteristic). Offline
+/// tools should prefer payload length / content over [kind] when reclassifying.
 class RawPacket {
   const RawPacket({
     required this.kind,
     required this.bytes,
     required this.receiveMonoUs,
     required this.wallClock,
+    this.characteristicUuid,
   });
 
   final PacketKind kind;
   final Uint8List bytes;
   final int receiveMonoUs;
   final DateTime wallClock;
+
+  /// GATT characteristic UUID that produced this notification, when known.
+  final String? characteristicUuid;
 }
 
 /// Decrypted 14-channel EEG sample.
