@@ -1,8 +1,9 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:device_info_plus/device_info_plus.dart'; // Add this import
-import 'package:path_provider/path_provider.dart'; // Add this too
+import 'package:device_info_plus/device_info_plus.dart';
+import 'package:path_provider/path_provider.dart';
 
 class DirectoryHelper {
   /// Request storage permissions with better Android version handling
@@ -35,7 +36,7 @@ class DirectoryHelper {
 			status.isGranted || status.isLimited);
 		}
 	  } catch (e) {
-		print("Error requesting storage permission: $e");
+		debugPrint("Error requesting storage permission: $e");
 		return false;
 	  }
 	}
@@ -55,7 +56,7 @@ class DirectoryHelper {
 		  return await Permission.storage.isGranted;
 		}
 	  } catch (e) {
-		print("Error checking storage permission: $e");
+		debugPrint("Error checking storage permission: $e");
 		return false;
 	  }
 	}
@@ -66,10 +67,13 @@ class DirectoryHelper {
   static Future<String?> selectDirectory() async {
 	if (Platform.isIOS) return null;
 	try {
+	  // Path-based CSV writers need a filesystem path; keep getDirectoryPath
+	  // until saveDirectory can consume SAF content:// URIs from pickDirectory().
+	  // ignore: deprecated_member_use
 	  final String? selectedDirectory = await FilePicker.getDirectoryPath();
 	  return selectedDirectory;
 	} catch (e) {
-	  print("Error selecting directory: $e");
+	  debugPrint("Error selecting directory: $e");
 	  return null;
 	}
   }
@@ -96,12 +100,12 @@ class DirectoryHelper {
   
   /// Debug method to check permissions
   static Future<void> debugPermissions() async {
-	print("=== Permission Debug Info ===");
+	debugPrint("=== Permission Debug Info ===");
 	
 	if (Platform.isAndroid) {
 	  try {
 		final androidInfo = await DeviceInfoPlugin().androidInfo;
-		print("Android SDK: ${androidInfo.version.sdkInt}");
+		debugPrint("Android SDK: ${androidInfo.version.sdkInt}");
 		
 		final permissions = [
 		  Permission.storage,
@@ -110,13 +114,13 @@ class DirectoryHelper {
 		
 		for (final permission in permissions) {
 		  final status = await permission.status;
-		  print("${permission.toString()}: ${status.toString()}");
+		  debugPrint("${permission.toString()}: ${status.toString()}");
 		}
 	  } catch (e) {
-		print("Error in debug permissions: $e");
+		debugPrint("Error in debug permissions: $e");
 	  }
 	}
 	
-	print("=== End Debug Info ===");
+	debugPrint("=== End Debug Info ===");
   }
 }
