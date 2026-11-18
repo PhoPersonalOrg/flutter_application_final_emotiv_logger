@@ -88,7 +88,16 @@ class _Body extends ConsumerWidget {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        _StateChip(state: state),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            _StateChip(state: state),
+            if (health.batteryPercent != null)
+              _BatteryChip(percent: health.batteryPercent!),
+          ],
+        ),
         const SizedBox(height: 12),
         _HealthCard(health: health),
         const SizedBox(height: 12),
@@ -154,11 +163,38 @@ class _StateChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Chip(
-        avatar: Icon(Icons.circle, size: 12, color: _color(context)),
-        label: Text(state.label, style: const TextStyle(fontWeight: FontWeight.w600)),
+    return Chip(
+      avatar: Icon(Icons.circle, size: 12, color: _color(context)),
+      label: Text(state.label, style: const TextStyle(fontWeight: FontWeight.w600)),
+    );
+  }
+}
+
+class _BatteryChip extends StatelessWidget {
+  const _BatteryChip({required this.percent});
+  final int percent;
+
+  Color get _color {
+    if (percent >= 50) return Colors.green.shade700;
+    if (percent >= 20) return Colors.orange.shade800;
+    return Colors.red.shade700;
+  }
+
+  IconData get _icon {
+    if (percent >= 90) return Icons.battery_full;
+    if (percent >= 60) return Icons.battery_5_bar;
+    if (percent >= 40) return Icons.battery_4_bar;
+    if (percent >= 20) return Icons.battery_2_bar;
+    return Icons.battery_alert;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Chip(
+      avatar: Icon(_icon, size: 18, color: _color),
+      label: Text(
+        '$percent%',
+        style: TextStyle(fontWeight: FontWeight.w600, color: _color),
       ),
     );
   }
@@ -189,6 +225,12 @@ class _HealthCard extends StatelessWidget {
               spacing: 16,
               runSpacing: 8,
               children: [
+                _metric(
+                  'Battery',
+                  health.batteryPercent != null
+                      ? '${health.batteryPercent}%'
+                      : '—',
+                ),
                 _metric('EEG Hz', health.eegHz.toStringAsFixed(0)),
                 _metric('Motion Hz', health.motionHz.toStringAsFixed(0)),
                 _metric('EEG pkts', '${health.eegPackets}'),

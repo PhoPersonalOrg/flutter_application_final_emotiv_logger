@@ -22,6 +22,7 @@ class AcquisitionHealth {
     this.networkConnected = false,
     this.networkMessage,
     this.dropboxMessage,
+    this.batteryPercent,
   });
 
   final int eegPackets;
@@ -50,6 +51,9 @@ class AcquisitionHealth {
   /// Last Dropbox auto-upload status (success or error).
   final String? dropboxMessage;
 
+  /// Headset battery from BLE Battery Level (`0x2A19`), 0–100. Null if unknown.
+  final int? batteryPercent;
+
   bool get isLslHealthy => lslStatus == LslSubsystemStatus.active;
 
   AcquisitionHealth copyWith({
@@ -76,6 +80,8 @@ class AcquisitionHealth {
     String? networkMessage,
     String? dropboxMessage,
     bool clearDropboxMessage = false,
+    int? batteryPercent,
+    bool clearBatteryPercent = false,
   }) {
     return AcquisitionHealth(
       eegPackets: eegPackets ?? this.eegPackets,
@@ -103,6 +109,9 @@ class AcquisitionHealth {
       dropboxMessage: clearDropboxMessage
           ? null
           : (dropboxMessage ?? this.dropboxMessage),
+      batteryPercent: clearBatteryPercent
+          ? null
+          : (batteryPercent ?? this.batteryPercent),
     );
   }
 }

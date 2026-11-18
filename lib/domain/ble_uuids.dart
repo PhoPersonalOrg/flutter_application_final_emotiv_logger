@@ -31,6 +31,19 @@ abstract final class EmotivBleUuids {
       _matches(uuid, serviceBControl);
   static bool isHeadsetConfig(String uuid) => _matches(uuid, headsetConfig);
 
+  /// Matches full or 16-bit Battery Level UUID (`0x2A19`).
+  static bool isBatteryLevel(String uuid) {
+    final id = uuid.toUpperCase().replaceAll('-', '');
+    return id == '00002A1900001000800000805F9B34FB' || id == '2A19';
+  }
+
+  /// Maps a Battery Level (`0x2A19`) payload to percent 0–100.
+  /// Returns null when the payload is empty.
+  static int? parseBatteryPercent(List<int> data) {
+    if (data.isEmpty) return null;
+    return data[0].clamp(0, 100);
+  }
+
   static bool _matches(String uuid, String a, [String? b]) {
     final id = uuid.toUpperCase();
     return id == a || (b != null && id == b);

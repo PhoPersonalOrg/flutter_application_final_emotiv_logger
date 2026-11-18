@@ -208,6 +208,7 @@ class AcquisitionSession {
     _userStopRequested = true;
     await _cancelReconnect();
     await _orderedTeardown(disconnectBle: true);
+    _mutateHealth((h) => h.copyWith(clearBatteryPercent: true));
     _emit(AcquisitionIdle(health: _health));
   }
 
@@ -350,6 +351,7 @@ class AcquisitionSession {
     BluetoothCharacteristic? serviceBControl;
     BluetoothCharacteristic? headsetConfigChar;
     BluetoothCharacteristic? disSerialChar;
+    BluetoothCharacteristic? batteryChar;
 
     for (final service in services) {
       for (final c in service.characteristics) {
@@ -365,6 +367,8 @@ class AcquisitionSession {
           serviceBControl = c;
         } else if (EmotivBleUuids.isHeadsetConfig(id)) {
           headsetConfigChar = c;
+        } else if (EmotivBleUuids.isBatteryLevel(id)) {
+          batteryChar = c;
         } else if (_isDisSerial(id)) {
           disSerialChar = c;
         }
@@ -434,8 +438,31 @@ class AcquisitionSession {
       );
     }
 
+    // Battery Level (`0x2A19`): optional BAS notify; missing is non-fatal.
+    if (batteryChar != null) {
+      try {
+        final initial = await batteryChar.read();
+        _applyBatteryPayload(initial);
+      } catch (_) {}
+      try {
+        await batteryChar.setNotifyValue(true);
+        _subs.add(
+          batteryChar.lastValueStream.listen((data) {
+            _applyBatteryPayload(data);
+          }),
+        );
+      } catch (_) {}
+    }
+
     // Enabling notifications is all that starts the stream; the official app
     // writes nothing to the EEG or motion characteristics.
+  }
+
+  void _applyBatteryPayload(List<int> data) {
+    final percent = EmotivBleUuids.parseBatteryPercent(data);
+    if (percent == null) return;
+    _mutateHealth((h) => h.copyWith(batteryPercent: percent));
+    _refreshStreamingHealth();
   }
 
   void _enqueueRaw(PacketKind kind, List<int> data) {
@@ -812,6 +839,7 @@ class AcquisitionSession {
         await _device?.disconnect();
       } catch (_) {}
       _device = null;
+      _mutateHealth((h) => h.copyWith(clearBatteryPercent: true));
     }
 
     if (shouldAutoUploadDropbox) {
