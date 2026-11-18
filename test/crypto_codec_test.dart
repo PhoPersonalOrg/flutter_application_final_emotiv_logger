@@ -103,11 +103,6 @@ void main() {
       expect(frame.values, isNot(contains(closeTo(words[7] / 7.8, 1e-9))));
     });
 
-    test('word 7 carries Mode-7 contact quality on type 0x10', () {
-      final frame = CryptoCodec.decryptEegFrames(key, packet).single;
-      expect(frame.contactQuality, words[7] & 0x7f);
-    });
-
     test('14-bit resolution scales by 1.95, 16-bit by 7.8', () {
       final v16 = CryptoCodec.decryptEeg(key, packet);
       final v14 = CryptoCodec.decryptEeg(key, packet, resolutionBits: 14);

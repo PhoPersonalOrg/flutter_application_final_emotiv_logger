@@ -79,13 +79,13 @@ final acquisitionStateProvider = StreamProvider<AcquisitionState>((ref) {
   });
 });
 
-/// Throttled latest Mode-7 contact quality (0–127) for the Record tab.
-final uiContactQualityProvider = StreamProvider<int>((ref) async* {
+/// Emits when a fresh EEG sample reaches the UI queue (Record-tab activity).
+final uiEegActivityProvider = StreamProvider<DateTime>((ref) async* {
   final session = ref.watch(acquisitionSessionProvider);
   await for (final _ in session.hub.uiAvailable) {
     final batch = session.hub.takeUiEeg(max: 1);
     if (batch.isNotEmpty) {
-      yield batch.last.contactQuality;
+      yield batch.last.wallClock;
     }
   }
 });
