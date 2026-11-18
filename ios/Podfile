@@ -36,6 +36,29 @@ target 'Runner' do
   end
 end
 
+# App Store Connect rejects embedded frameworks missing CFBundleShortVersionString.
+# lsl.framework from lsl_bindings ships with CFBundleVersion only.
+def ensure_framework_short_version_string(root)
+  require 'shellwords'
+  buddy = '/usr/libexec/PlistBuddy'
+  return unless File.executable?(buddy)
+  return unless root && Dir.exist?(root.to_s)
+
+  Dir.glob(File.join(root.to_s, '**', '*.framework', 'Info.plist')).each do |plist_path|
+    next unless File.file?(plist_path)
+
+    existing = `#{buddy} -c 'Print :CFBundleShortVersionString' #{Shellwords.escape(plist_path)} 2>/dev/null`.strip
+    next unless existing.empty?
+
+    version = `#{buddy} -c 'Print :CFBundleVersion' #{Shellwords.escape(plist_path)} 2>/dev/null`.strip
+    version = '1.0' if version.empty?
+    unless system(buddy, '-c', "Add :CFBundleShortVersionString string #{version}", plist_path)
+      raise "Failed to add CFBundleShortVersionString to #{plist_path}"
+    end
+    Pod::UI.puts "Added CFBundleShortVersionString=#{version} to #{plist_path}"
+  end
+end
+
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
@@ -43,6 +66,17 @@ post_install do |installer|
       if config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'].to_f < 15.0
         config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
       end
+    end
+  end
+
+  ensure_framework_short_version_string(File.join(__dir__, '.symlinks'))
+  ensure_framework_short_version_string(File.join(__dir__, 'Pods'))
+  # Path pods keep vendored xcframeworks under the plugin source tree.
+  installer.pod_targets.each do |pod_target|
+    begin
+      ensure_framework_short_version_string(installer.sandbox.pod_dir(pod_target.pod_name))
+    rescue StandardError => e
+      Pod::UI.warn "Skipping framework plist patch for #{pod_target.pod_name}: #{e}"
     end
   end
 end
