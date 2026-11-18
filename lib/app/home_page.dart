@@ -107,6 +107,16 @@ class _Body extends ConsumerWidget {
         _Controls(state: state),
         const SizedBox(height: 12),
         if (state is AcquisitionScanning) ...[
+          if ((state as AcquisitionScanning).errorMessage != null) ...[
+            Card(
+              color: Theme.of(context).colorScheme.errorContainer,
+              child: ListTile(
+                title: Text((state as AcquisitionScanning).errorMessage!),
+                subtitle: const Text('Device list kept — tap Connect to retry'),
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           _DeviceList(scanning: state as AcquisitionScanning),
           const SizedBox(height: 12),
         ],
@@ -368,9 +378,7 @@ class _Controls extends ConsumerWidget {
             preferredName.isNotEmpty &&
             canScan)
           FilledButton.tonalIcon(
-            onPressed: scanActive
-                ? null
-                : () => session.reconnectPreferred(),
+            onPressed: () => session.reconnectPreferred(),
             icon: const Icon(Icons.link),
             label: Text('Reconnect $preferredName'),
           ),
