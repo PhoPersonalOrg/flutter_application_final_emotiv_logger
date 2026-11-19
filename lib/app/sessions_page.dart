@@ -289,7 +289,7 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
   /// Upload every finished session to every ready destination (Dropbox + bookmarks
   /// with a remembered password). Bookmarks without a password are reported skipped.
   Future<void> _syncAll() async {
-    final sessions = ref.read(sessionListProvider).valueOrNull ?? const [];
+    final sessions = ref.read(sessionListProvider).value ?? const [];
     final paths =
         sessions.where((s) => !s.isActive).map((s) => s.path).toList();
     if (paths.isEmpty) {
