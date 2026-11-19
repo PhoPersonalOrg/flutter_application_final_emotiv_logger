@@ -60,3 +60,6 @@ flutter_02.png
 .specstory
 .cursorindexingignore
 .cursor/chats/
+# Widget Preview related
+.widget_preview/
+.cursorindexingignore.bak
