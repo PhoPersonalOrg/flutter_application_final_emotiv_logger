@@ -158,7 +158,10 @@ class _BookmarkEditorPageState extends ConsumerState<BookmarkEditorPage> {
     );
     _username = TextEditingController(text: e?.username ?? '');
     _password = TextEditingController();
-    _remotePath = TextEditingController(text: e?.remotePath ?? '');
+    _remotePath = TextEditingController(
+      text: e?.remotePath ??
+          (_protocol == TransferProtocol.smb ? defaultSmbRemotePath : ''),
+    );
     _smbShare = TextEditingController(text: e?.smbShare ?? '');
     _domain = TextEditingController(text: e?.domain ?? '');
     _rememberPassword = e?.rememberPassword ?? true;
@@ -200,7 +203,9 @@ class _BookmarkEditorPageState extends ConsumerState<BookmarkEditorPage> {
       host: _host.text.trim(),
       port: int.tryParse(_port.text.trim()) ?? _protocol.defaultPort,
       username: _username.text.trim(),
-      remotePath: _remotePath.text.trim(),
+      remotePath: _protocol == TransferProtocol.smb
+          ? normalizeSmbRemotePath(_remotePath.text)
+          : _remotePath.text.trim(),
       smbShare: share,
       domain: _domain.text.trim(),
       rememberPassword: _rememberPassword,
@@ -403,6 +408,12 @@ class _BookmarkEditorPageState extends ConsumerState<BookmarkEditorPage> {
                   if (_port.text == '22' || _port.text == '445') {
                     _port.text = '${next.defaultPort}';
                   }
+                  // New / blank SMB bookmarks get the default share-relative
+                  // path; leave an explicit clear or custom value alone.
+                  if (next == TransferProtocol.smb &&
+                      _remotePath.text.trim().isEmpty) {
+                    _remotePath.text = defaultSmbRemotePath;
+                  }
                 });
               },
             ),
@@ -540,7 +551,7 @@ class _BookmarkEditorPageState extends ConsumerState<BookmarkEditorPage> {
                     : 'Remote path (under share)',
                 hintText: _protocol == TransferProtocol.sftp
                     ? '/home/user/emotiv'
-                    : 'emotiv/recordings',
+                    : defaultSmbRemotePath,
                 border: const OutlineInputBorder(),
               ),
             ),

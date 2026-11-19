@@ -1,3 +1,8 @@
+/// Default share-relative remote path for new SMB bookmarks.
+///
+/// Pre-filled in the bookmark editor unless the user clears or changes it.
+const defaultSmbRemotePath = 'flutter-eeg/recordings';
+
 /// SMB share names must not include path separators (libsmb2 builds
 /// `//{host}/{share}`; a leading `/` becomes `//host//share`).
 String normalizeSmbShare(String raw) {
