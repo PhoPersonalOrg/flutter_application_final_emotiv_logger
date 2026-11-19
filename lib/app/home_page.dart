@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -39,12 +41,17 @@ class _HomePageState extends ConsumerState<HomePage>
   }
 
   Future<void> _ensurePermissions() async {
-    await [
+    final permissions = <Permission>[
       Permission.bluetooth,
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
       Permission.locationWhenInUse,
-    ].request();
+    ];
+    // Android 13+ needs POST_NOTIFICATIONS for the streaming FGS notification.
+    if (Platform.isAndroid) {
+      permissions.add(Permission.notification);
+    }
+    await permissions.request();
   }
 
   @override
