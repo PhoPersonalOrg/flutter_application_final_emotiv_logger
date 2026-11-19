@@ -2,6 +2,10 @@ import 'package:flutter_emotiv_logger/sessions/smb_paths.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('defaultSmbRemotePath is flutter-eeg/recordings', () {
+    expect(defaultSmbRemotePath, 'flutter-eeg/recordings');
+  });
+
   group('normalizeSmbShare', () {
     test('strips leading slash that caused //host//share', () {
       expect(normalizeSmbShare('/h'), 'h');
@@ -32,7 +36,11 @@ void main() {
 
   group('normalizeSmbRemotePath', () {
     test('strips leading slashes for share-relative paths', () {
-      expect(normalizeSmbRemotePath('/emotiv/recordings'), 'emotiv/recordings');
+      expect(
+        normalizeSmbRemotePath('/flutter-eeg/recordings'),
+        'flutter-eeg/recordings',
+      );
+      expect(normalizeSmbRemotePath(defaultSmbRemotePath), defaultSmbRemotePath);
       expect(normalizeSmbRemotePath('emotiv'), 'emotiv');
       expect(normalizeSmbRemotePath(''), '');
     });
