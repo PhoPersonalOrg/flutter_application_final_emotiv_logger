@@ -22,6 +22,7 @@ import '../sinks/network_sink.dart';
 import '../sinks/sample_hub.dart';
 import 'ble_fsm_policy.dart';
 import 'session_subscriptions.dart';
+import 'streaming_foreground_service.dart';
 
 /// Owns the BLE acquisition FSM, decode pipeline, and sinks.
 class AcquisitionSession {
@@ -255,11 +256,13 @@ class AcquisitionSession {
 
   Future<void> disconnect() async {
     _userStopRequested = true;
-    _bumpEpoch();
+    final epoch = _bumpEpoch();
     await _cancelReconnect();
     await _orderedTeardown(disconnectBle: true);
     _mutateHealth((h) => h.copyWith(clearBatteryPercent: true));
     _emit(AcquisitionIdle(health: _health));
+    // Stop FGS after CSV flush/teardown so the process is not demoted mid-flush.
+    await StreamingForegroundService.ensureStopped(epoch: epoch);
   }
 
   Future<void> flush() async {
@@ -274,10 +277,11 @@ class AcquisitionSession {
 
   Future<void> dispose() async {
     _userStopRequested = true;
-    _bumpEpoch();
+    final epoch = _bumpEpoch();
     await _cancelReconnect();
     await _stopScanRadio();
     await _orderedTeardown(disconnectBle: true);
+    await StreamingForegroundService.ensureStopped(epoch: epoch);
     await _liveSync.dispose();
     await _decode.dispose();
     await _hub.dispose();
@@ -298,6 +302,11 @@ class AcquisitionSession {
         deviceName: device.platformName,
         health: _health,
       ),
+    );
+    // Pin the process for connect+prepare+stream (kept through Reconnecting).
+    await StreamingForegroundService.ensureStarted(
+      device.platformName,
+      epoch: epoch,
     );
     try {
       // Drop any half-open OS link before a fresh connect attempt.
@@ -425,14 +434,20 @@ class AcquisitionSession {
       );
 
       if (!_isEpochCurrent(epoch)) return;
+      final streamingName = name.isEmpty ? _identity!.deviceName : name;
       _emit(
         AcquisitionStreaming(
-          deviceName: name.isEmpty ? _identity!.deviceName : name,
+          deviceName: streamingName,
           sessionDir: sessionPath.isEmpty
               ? (_health.csvSessionPath ?? '(no csv)')
               : sessionPath,
           health: _health,
         ),
+      );
+      // Idempotent: covers reconnect path that skips Connecting.
+      await StreamingForegroundService.ensureStarted(
+        streamingName,
+        epoch: epoch,
       );
     } catch (e) {
       if (!_isEpochCurrent(epoch)) return;
@@ -700,6 +715,7 @@ class AcquisitionSession {
           health: _health.copyWith(reconnectAttempt: _reconnectAttempt),
         ),
       );
+      await StreamingForegroundService.ensureStopped(epoch: currentEpoch);
       return;
     }
 
@@ -860,6 +876,7 @@ class AcquisitionSession {
             health: _health,
           ),
         );
+        unawaited(StreamingForegroundService.ensureStopped(epoch: _opEpoch));
         return false;
       }
     } catch (_) {}
@@ -884,6 +901,7 @@ class AcquisitionSession {
           health: _health,
         ),
       );
+      unawaited(StreamingForegroundService.ensureStopped(epoch: _opEpoch));
       return false;
     }
     return true;
@@ -988,6 +1006,8 @@ class AcquisitionSession {
         health: _health,
       ),
     );
+    // Soft connect/prepare failure: drop FGS (fire-and-forget).
+    unawaited(StreamingForegroundService.ensureStopped(epoch: _opEpoch));
   }
 
   Future<void> _tryAutoConnectPreferred() async {

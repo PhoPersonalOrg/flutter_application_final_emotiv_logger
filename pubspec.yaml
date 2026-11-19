@@ -49,6 +49,7 @@ dependencies:
   http: ^1.6.0
   package_info_plus: ^10.2.2
   geolocator: ^14.1.2
+  flutter_foreground_task: ^11.0.3
 
 dev_dependencies:
   flutter_test:
