@@ -22,7 +22,7 @@
 #        chmod +x scripts/codemagic_bump_build_number.sh
 #        ./scripts/codemagic_bump_build_number.sh
 #   3. Flutter build arguments (recommended):
-#        --build-number=$NEW_BUILD_NUMBER
+#        --build-number=$NEW_BUILD_NUMBER --dart-define=BUILD_TIME=$BUILD_TIME
 #
 # Optional env:
 #   APP_APPLE_ID — App Store Connect numeric Apple ID for this app
@@ -123,12 +123,16 @@ else
   echo "WARNING: could not rewrite pubspec.yaml version line; rely on --build-number=\$NEW_BUILD_NUMBER" >&2
 fi
 
+BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
 if [[ -n "${CM_ENV:-}" ]]; then
   echo "NEW_BUILD_NUMBER=$next" >>"$CM_ENV"
-  echo "Wrote NEW_BUILD_NUMBER=$next to \$CM_ENV"
+  echo "BUILD_TIME=$BUILD_TIME" >>"$CM_ENV"
+  echo "Wrote NEW_BUILD_NUMBER=$next and BUILD_TIME=$BUILD_TIME to \$CM_ENV"
 fi
 
 export NEW_BUILD_NUMBER="$next"
+export BUILD_TIME
 # Reserved by Flutter; never export them (even empty). Unset for this process only.
 unset FLUTTER_BUILD_NUMBER FLUTTER_BUILD_NAME || true
 

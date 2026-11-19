@@ -22,4 +22,8 @@ if ((Test-Path -LiteralPath $jdk21) -and ($env:JAVA_HOME -match 'jdk-2[5-9]|jdk-
     Write-Host "Using JAVA_HOME=$env:JAVA_HOME (Gradle Kotlin DSL)"
 }
 
-& fvm flutter run --release --dart-define-from-file=.env @args
+$BuildTime = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+& fvm flutter run --release `
+  --dart-define-from-file=.env `
+  --dart-define="BUILD_TIME=$BuildTime" `
+  @args
