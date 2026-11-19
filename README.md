@@ -149,9 +149,9 @@ chmod +x scripts/codemagic_bump_build_number.sh
 ./scripts/codemagic_bump_build_number.sh
 ```
 
-3. Flutter build arguments (recommended): `--build-number=$NEW_BUILD_NUMBER`
+3. Flutter build arguments (recommended): `--build-number=$NEW_BUILD_NUMBER --dart-define=BUILD_TIME=$BUILD_TIME`
 
-The script sets `NEW_BUILD_NUMBER` to `max(ASC/TestFlight latest+1, PROJECT_BUILD_NUMBER/BUILD_NUMBER, pubspec+1)`, writes it to `$CM_ENV`, and rewrites `pubspec.yaml`’s `+N` in the CI workspace so the IPA still bumps even if the Flutter build-args field is missing. ASC queries use `--all-versions` so a higher build on an older marketing version still floors the next number.
+The script sets `NEW_BUILD_NUMBER` to `max(ASC/TestFlight latest+1, PROJECT_BUILD_NUMBER/BUILD_NUMBER, pubspec+1)`, writes it and `BUILD_TIME` (UTC ISO-8601 for the Record-screen build caption) to `$CM_ENV`, and rewrites `pubspec.yaml`’s `+N` in the CI workspace so the IPA still bumps even if the Flutter build-args field is missing. ASC queries use `--all-versions` so a higher build on an older marketing version still floors the next number.
 
 **Verify a green build actually bumped:** in the Codemagic log, find `Using build number:` / `Updated pubspec.yaml version to` and confirm TestFlight shows that `CFBundleVersion`. If you see `Skipping ASC lookup`, add `APP_APPLE_ID`.
 

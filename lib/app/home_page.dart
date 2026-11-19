@@ -57,6 +57,7 @@ class _HomePageState extends ConsumerState<HomePage>
   @override
   Widget build(BuildContext context) {
     final asyncState = ref.watch(acquisitionStateProvider);
+    final buildInfoAsync = ref.watch(buildInfoProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -72,10 +73,31 @@ class _HomePageState extends ConsumerState<HomePage>
           ),
         ],
       ),
-      body: asyncState.when(
-        data: (state) => _Body(state: state),
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('State error: $e')),
+      body: Column(
+        children: [
+          Expanded(
+            child: asyncState.when(
+              data: (state) => _Body(state: state),
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) => Center(child: Text('State error: $e')),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+            child: Text(
+              buildInfoAsync.when(
+                data: (info) => info.label,
+                loading: () => '',
+                error: (_, __) => '',
+              ),
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 11,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
