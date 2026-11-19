@@ -18,6 +18,7 @@ class TransferProgress {
     required this.bytesSent,
     required this.bytesTotal,
     this.done = false,
+    this.skipped = false,
     this.error,
   });
 
@@ -28,6 +29,8 @@ class TransferProgress {
   final int bytesSent;
   final int bytesTotal;
   final bool done;
+  /// True when the remote file already matched local size and was not uploaded.
+  final bool skipped;
   final String? error;
 
   double get fraction {
@@ -37,6 +40,13 @@ class TransferProgress {
 }
 
 typedef TransferProgressCallback = void Function(TransferProgress progress);
+
+/// Skip upload when a remote file exists with the same byte size as local.
+bool shouldSkipIdenticalRemoteFile({
+  required int localBytes,
+  required int? remoteBytes,
+}) =>
+    remoteBytes != null && remoteBytes == localBytes;
 
 /// Uploads local `session_*` folders over SFTP or SMB.
 class SessionTransfer {
@@ -212,6 +222,7 @@ class SessionTransfer {
         await pool.mkdir(remoteSession, recursive: true);
 
         final files = await _listFiles(sessionPath);
+        final remoteSizes = await _smbRemoteFileSizes(pool, remoteSession);
         var fileIndex = 0;
         for (final file in files) {
           _throwIfCancelled(isCancelled);
@@ -219,6 +230,24 @@ class SessionTransfer {
           final name = p.basename(file.path);
           final remoteFile = '$remoteSession/$name';
           final length = await file.length();
+
+          if (shouldSkipIdenticalRemoteFile(
+            localBytes: length,
+            remoteBytes: remoteSizes[name],
+          )) {
+            onProgress?.call(
+              TransferProgress(
+                sessionFolder: folderName,
+                fileName: name,
+                fileIndex: fileIndex,
+                fileCount: files.length,
+                bytesSent: length,
+                bytesTotal: length,
+                skipped: true,
+              ),
+            );
+            continue;
+          }
 
           onProgress?.call(
             TransferProgress(
@@ -358,6 +387,25 @@ class SessionTransfer {
     }
     out.sort((a, b) => p.basename(a.path).compareTo(p.basename(b.path)));
     return out;
+  }
+
+  /// Maps basename → size for files already under [remoteSession].
+  static Future<Map<String, int>> _smbRemoteFileSizes(
+    Smb2Pool pool,
+    String remoteSession,
+  ) async {
+    try {
+      final entries = await pool.listDirectory(remoteSession);
+      final out = <String, int>{};
+      for (final entry in entries) {
+        if (entry.isFile) {
+          out[entry.name] = entry.size;
+        }
+      }
+      return out;
+    } catch (_) {
+      return const {};
+    }
   }
 
   static void _throwIfCancelled(bool Function()? isCancelled) {

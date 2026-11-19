@@ -143,6 +143,8 @@ class DropboxSync {
       throw StateError('Session folder is empty: $localSessionDir');
     }
 
+    final remoteSizes = await _remoteFileSizes(remoteSession);
+
     var fileIndex = 0;
     for (final file in files) {
       if (isCancelled != null && isCancelled()) {
@@ -152,6 +154,24 @@ class DropboxSync {
       final name = p.basename(file.path);
       final remoteFile = '$remoteSession/$name';
       final length = await file.length();
+
+      if (shouldSkipIdenticalRemoteFile(
+        localBytes: length,
+        remoteBytes: remoteSizes[name],
+      )) {
+        onProgress?.call(
+          TransferProgress(
+            sessionFolder: folderName,
+            fileName: name,
+            fileIndex: fileIndex,
+            fileCount: files.length,
+            bytesSent: length,
+            bytesTotal: length,
+            skipped: true,
+          ),
+        );
+        continue;
+      }
 
       onProgress?.call(
         TransferProgress(
@@ -251,5 +271,36 @@ class DropboxSync {
       s = s.substring(0, s.length - 1);
     }
     return s.isEmpty ? defaultRemoteRoot : s;
+  }
+
+  /// Basename → size for files already under [remoteSession] (App Folder path).
+  static Future<Map<String, int>> _remoteFileSizes(String remoteSession) async {
+    try {
+      final listed = await Dropbox.listFolder(remoteSession);
+      final out = <String, int>{};
+      if (listed is! List) return out;
+      for (final item in listed) {
+        if (item is! Map) continue;
+        final filesize = item['filesize'] ?? item['size'];
+        if (filesize is! num) continue;
+        final name = _dropboxEntryName(item);
+        if (name == null || name.isEmpty) continue;
+        out[name] = filesize.toInt();
+      }
+      return out;
+    } catch (_) {
+      // Folder missing or list failed — treat as empty (upload everything).
+      return const {};
+    }
+  }
+
+  static String? _dropboxEntryName(Map<dynamic, dynamic> item) {
+    final name = item['name'];
+    if (name is String && name.isNotEmpty) return name;
+    final pathLower = item['pathLower'] ?? item['path_lower'] ?? item['pathDisplay'];
+    if (pathLower is! String || pathLower.isEmpty) return null;
+    final trimmed = pathLower.replaceAll('\\', '/');
+    final slash = trimmed.lastIndexOf('/');
+    return slash >= 0 ? trimmed.substring(slash + 1) : trimmed;
   }
 }

@@ -58,6 +58,11 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
             ),
           ] else ...[
             IconButton(
+              tooltip: 'Sync All',
+              onPressed: _syncAll,
+              icon: const Icon(Icons.sync),
+            ),
+            IconButton(
               tooltip: 'Select',
               onPressed: () => setState(() => _selectMode = true),
               icon: const Icon(Icons.checklist),
@@ -245,6 +250,137 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
     await ref.read(sessionListProvider.notifier).refresh();
   }
 
+  Future<void> _promptNoDestinations() async {
+    final action = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('No transfer destinations'),
+        content: const Text(
+          'Connect Dropbox in Settings or add an SFTP/SMB bookmark.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, 'settings'),
+            child: const Text('Settings'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, 'bookmark'),
+            child: const Text('Add bookmark'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (action == 'bookmark') {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const BookmarksPage()),
+      );
+    } else if (action == 'settings') {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
+      );
+    }
+  }
+
+  /// Upload every finished session to every ready destination (Dropbox + bookmarks
+  /// with a remembered password). Bookmarks without a password are reported skipped.
+  Future<void> _syncAll() async {
+    final sessions = ref.read(sessionListProvider).valueOrNull ?? const [];
+    final paths =
+        sessions.where((s) => !s.isActive).map((s) => s.path).toList();
+    if (paths.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No finished sessions to sync')),
+      );
+      return;
+    }
+
+    final bookmarkState = await ref.read(bookmarkStoreProvider.future);
+    final dropboxLinked = await ref.read(dropboxSyncProvider).isLinked();
+    if (!mounted) return;
+
+    final readyBookmarks = <({ServerBookmark bookmark, String password})>[];
+    final skippedNoPassword = <String>[];
+    for (final b in bookmarkState.bookmarks) {
+      final password =
+          await ref.read(bookmarkStoreProvider.notifier).readPassword(b.id);
+      if (password != null && password.isNotEmpty) {
+        readyBookmarks.add((bookmark: b, password: password));
+      } else {
+        skippedNoPassword.add(b.name);
+      }
+    }
+
+    if (!dropboxLinked && readyBookmarks.isEmpty) {
+      await _promptNoDestinations();
+      return;
+    }
+
+    final destinationLines = <String>[
+      if (dropboxLinked) 'Dropbox (App Folder)',
+      for (final e in readyBookmarks)
+        '${e.bookmark.name} (${e.bookmark.protocol.label})',
+    ];
+    final skippedLines = [
+      for (final name in skippedNoPassword) '$name (no password)',
+    ];
+
+    if (!mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Sync All'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Upload ${paths.length} session'
+                '${paths.length == 1 ? '' : 's'} to:',
+              ),
+              const SizedBox(height: 8),
+              for (final line in destinationLines) Text('• $line'),
+              if (skippedLines.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                const Text('Skipped destinations:'),
+                for (final line in skippedLines) Text('• $line'),
+              ],
+              const SizedBox(height: 12),
+              const Text(
+                'Identical files already on Dropbox/SMB are skipped.',
+                style: TextStyle(fontSize: 12, color: Colors.black54),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Sync All'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    await _runMultiDestinationSync(
+      sessionPaths: paths,
+      includeDropbox: dropboxLinked,
+      bookmarks: readyBookmarks,
+      skippedDestinations: skippedNoPassword,
+    );
+  }
+
   Future<void> _transferSelected() async {
     final paths = _selected.toList();
     if (paths.isEmpty) return;
@@ -255,39 +391,7 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
 
     final hasBookmarks = bookmarkState.bookmarks.isNotEmpty;
     if (!hasBookmarks && !dropboxLinked) {
-      final action = await showDialog<String>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('No transfer destinations'),
-          content: const Text(
-            'Connect Dropbox in Settings or add an SFTP/SMB bookmark.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, 'settings'),
-              child: const Text('Settings'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, 'bookmark'),
-              child: const Text('Add bookmark'),
-            ),
-          ],
-        ),
-      );
-      if (!mounted) return;
-      if (action == 'bookmark') {
-        await Navigator.of(context).push(
-          MaterialPageRoute<void>(builder: (_) => const BookmarksPage()),
-        );
-      } else if (action == 'settings') {
-        await Navigator.of(context).push(
-          MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
-        );
-      }
+      await _promptNoDestinations();
       return;
     }
 
@@ -332,52 +436,19 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
 
   Future<void> _runDropboxTransfer({required List<String> sessionPaths}) async {
     var cancelled = false;
-    final progress = ValueNotifier<TransferProgress?>(null);
+    final progress = ValueNotifier<_SyncUiProgress>(
+      const _SyncUiProgress(destination: 'Dropbox'),
+    );
     final remoteRoot = ref.read(settingsProvider).dropboxRemoteRoot;
 
-    if (!mounted) return;
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        return ValueListenableBuilder<TransferProgress?>(
-          valueListenable: progress,
-          builder: (ctx, p, _) {
-            return AlertDialog(
-              title: const Text('Uploading to Dropbox'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (p == null)
-                    const Text('Connecting…')
-                  else ...[
-                    Text(p.sessionFolder),
-                    Text(
-                      p.fileName.isEmpty
-                          ? 'Finishing…'
-                          : '${p.fileName} (${p.fileIndex}/${p.fileCount})',
-                    ),
-                    const SizedBox(height: 12),
-                    LinearProgressIndicator(
-                      value: p.bytesTotal > 0 ? p.fraction : null,
-                    ),
-                  ],
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => cancelled = true,
-                  child: const Text('Cancel'),
-                ),
-              ],
-            );
-          },
-        );
-      },
+    _showTransferProgressDialog(
+      title: 'Uploading to Dropbox',
+      progress: progress,
+      onCancel: () => cancelled = true,
     );
 
     String? error;
+    var skippedFiles = 0;
     try {
       if (!DropboxConfig.isConfigured) {
         throw StateError('Dropbox app key not configured (see README)');
@@ -386,7 +457,13 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
             sessionPaths,
             remoteRoot: remoteRoot,
             isCancelled: () => cancelled,
-            onProgress: (p) => progress.value = p,
+            onProgress: (p) {
+              if (p.skipped) skippedFiles++;
+              progress.value = _SyncUiProgress(
+                destination: 'Dropbox',
+                file: p,
+              );
+            },
           );
     } on TransferCancelled {
       error = 'Cancelled';
@@ -401,11 +478,13 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
     if (!mounted) return;
 
     if (error == null && !cancelled) {
+      final skipNote =
+          skippedFiles > 0 ? ' ($skippedFiles identical file(s) skipped)' : '';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
             'Uploaded ${sessionPaths.length} session'
-            '${sessionPaths.length == 1 ? '' : 's'} to Dropbox',
+            '${sessionPaths.length == 1 ? '' : 's'} to Dropbox$skipNote',
           ),
         ),
       );
@@ -434,58 +513,31 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
     }
 
     var cancelled = false;
-    final progress = ValueNotifier<TransferProgress?>(null);
+    final progress = ValueNotifier<_SyncUiProgress>(
+      _SyncUiProgress(destination: bookmark.name),
+    );
 
-    if (!mounted) return;
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        return ValueListenableBuilder<TransferProgress?>(
-          valueListenable: progress,
-          builder: (ctx, p, _) {
-            return AlertDialog(
-              title: const Text('Transferring'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (p == null)
-                    const Text('Connecting…')
-                  else ...[
-                    Text(p.sessionFolder),
-                    Text(
-                      p.fileName.isEmpty
-                          ? 'Finishing…'
-                          : '${p.fileName} (${p.fileIndex}/${p.fileCount})',
-                    ),
-                    const SizedBox(height: 12),
-                    LinearProgressIndicator(
-                      value: p.bytesTotal > 0 ? p.fraction : null,
-                    ),
-                  ],
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => cancelled = true,
-                  child: const Text('Cancel'),
-                ),
-              ],
-            );
-          },
-        );
-      },
+    _showTransferProgressDialog(
+      title: 'Transferring',
+      progress: progress,
+      onCancel: () => cancelled = true,
     );
 
     String? error;
+    var skippedFiles = 0;
     try {
       await SessionTransfer.uploadSessions(
         bookmark: bookmark,
         password: password,
         sessionPaths: sessionPaths,
         isCancelled: () => cancelled,
-        onProgress: (p) => progress.value = p,
+        onProgress: (p) {
+          if (p.skipped) skippedFiles++;
+          progress.value = _SyncUiProgress(
+            destination: bookmark.name,
+            file: p,
+          );
+        },
       );
     } on TransferCancelled {
       error = 'Cancelled';
@@ -500,11 +552,13 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
     if (!mounted) return;
 
     if (error == null && !cancelled) {
+      final skipNote =
+          skippedFiles > 0 ? ' ($skippedFiles identical file(s) skipped)' : '';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
             'Transferred ${sessionPaths.length} session'
-            '${sessionPaths.length == 1 ? '' : 's'} to ${bookmark.name}',
+            '${sessionPaths.length == 1 ? '' : 's'} to ${bookmark.name}$skipNote',
           ),
         ),
       );
@@ -518,6 +572,173 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
       );
     }
   }
+
+  Future<void> _runMultiDestinationSync({
+    required List<String> sessionPaths,
+    required bool includeDropbox,
+    required List<({ServerBookmark bookmark, String password})> bookmarks,
+    required List<String> skippedDestinations,
+  }) async {
+    var cancelled = false;
+    final progress = ValueNotifier<_SyncUiProgress>(
+      const _SyncUiProgress(destination: 'Starting…'),
+    );
+
+    _showTransferProgressDialog(
+      title: 'Sync All',
+      progress: progress,
+      onCancel: () => cancelled = true,
+    );
+
+    final synced = <String>[];
+    final failed = <String>[];
+    var skippedFiles = 0;
+    final remoteRoot = ref.read(settingsProvider).dropboxRemoteRoot;
+
+    void onFileProgress(String destination, TransferProgress p) {
+      if (p.skipped) skippedFiles++;
+      progress.value = _SyncUiProgress(destination: destination, file: p);
+    }
+
+    if (includeDropbox && !cancelled) {
+      progress.value = const _SyncUiProgress(destination: 'Dropbox');
+      try {
+        if (!DropboxConfig.isConfigured) {
+          throw StateError('Dropbox app key not configured (see README)');
+        }
+        await ref.read(dropboxSyncProvider).uploadSessions(
+              sessionPaths,
+              remoteRoot: remoteRoot,
+              isCancelled: () => cancelled,
+              onProgress: (p) => onFileProgress('Dropbox', p),
+            );
+        synced.add('Dropbox');
+      } on TransferCancelled {
+        cancelled = true;
+      } catch (e) {
+        failed.add('Dropbox ($e)');
+      }
+    }
+
+    for (final entry in bookmarks) {
+      if (cancelled) break;
+      final label = entry.bookmark.name;
+      progress.value = _SyncUiProgress(destination: label);
+      try {
+        await SessionTransfer.uploadSessions(
+          bookmark: entry.bookmark,
+          password: entry.password,
+          sessionPaths: sessionPaths,
+          isCancelled: () => cancelled,
+          onProgress: (p) => onFileProgress(label, p),
+        );
+        synced.add(label);
+      } on TransferCancelled {
+        cancelled = true;
+        break;
+      } catch (e) {
+        failed.add('$label ($e)');
+      }
+    }
+
+    progress.dispose();
+    if (mounted && Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+    }
+    if (!mounted || cancelled) return;
+
+    final parts = <String>[];
+    if (synced.isNotEmpty) {
+      parts.add('Synced to ${synced.join(', ')}');
+    }
+    if (skippedDestinations.isNotEmpty) {
+      parts.add(
+        'skipped ${skippedDestinations.join(', ')} (no password)',
+      );
+    }
+    if (skippedFiles > 0) {
+      parts.add('$skippedFiles identical file(s) already present');
+    }
+    if (failed.isNotEmpty) {
+      parts.add('failed: ${failed.join('; ')}');
+    }
+    if (parts.isEmpty) {
+      parts.add('Nothing to sync');
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(parts.join('; '))),
+    );
+  }
+
+  void _showTransferProgressDialog({
+    required String title,
+    required ValueNotifier<_SyncUiProgress> progress,
+    required VoidCallback onCancel,
+  }) {
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        return ValueListenableBuilder<_SyncUiProgress>(
+          valueListenable: progress,
+          builder: (ctx, ui, _) {
+            final p = ui.file;
+            return AlertDialog(
+              title: Text(title),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(ui.destination),
+                  if (p == null)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 8),
+                      child: Text('Connecting…'),
+                    )
+                  else ...[
+                    Text(p.sessionFolder),
+                    Text(
+                      p.fileName.isEmpty
+                          ? 'Finishing…'
+                          : p.skipped
+                              ? '${p.fileName} skipped '
+                                  '(${p.fileIndex}/${p.fileCount})'
+                              : '${p.fileName} '
+                                  '(${p.fileIndex}/${p.fileCount})',
+                    ),
+                    const SizedBox(height: 12),
+                    LinearProgressIndicator(
+                      value: p.skipped
+                          ? 1
+                          : (p.bytesTotal > 0 ? p.fraction : null),
+                    ),
+                  ],
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: onCancel,
+                  child: const Text('Cancel'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _SyncUiProgress {
+  const _SyncUiProgress({
+    required this.destination,
+    this.file,
+  });
+
+  final String destination;
+  final TransferProgress? file;
 }
 
 class _TransferDialogResult {
