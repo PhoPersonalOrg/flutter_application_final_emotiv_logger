@@ -103,7 +103,7 @@ Packet layouts, channel order and scale factors follow the EmotivPRO V4 Android 
 
 ## LSL
 
-In-process outlets via `lsl_flutter` only:
+In-process outlets via vendored `liblsl` (`packages/liblsl`), advertising the configured **Hostname** from Settings (default `iPhone`, shown in LabRecorder as `Epoc X (iPhone)`):
 
 | Stream | Type | Channels | Rate |
 |--------|------|----------|------|

@@ -41,7 +41,8 @@ dependencies:
   path: ^1.9.1
   dartssh2: ^4.1.0
   dart_smb2: ^0.3.0
-  lsl_flutter: ^0.0.6
+  liblsl:
+    path: packages/liblsl
   flutter_riverpod: ^3.5.0
   riverpod: ^3.5.0
   nsd: ^5.0.1

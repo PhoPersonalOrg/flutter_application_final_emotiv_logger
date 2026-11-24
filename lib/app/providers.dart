@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../acquisition/acquisition_session.dart';
 import '../domain/acquisition_state.dart';
 import '../plot/live_eeg_ring_buffer.dart';
+import '../sessions/background_transfer.dart';
 import '../sessions/bookmark_store.dart';
 import '../sessions/dropbox_sync.dart';
 import '../sessions/server_bookmark.dart';
@@ -224,3 +225,8 @@ class SessionListNotifier extends AsyncNotifier<List<SessionRecord>> {
     await future;
   }
 }
+
+final backgroundTransferProvider =
+    NotifierProvider<BackgroundTransferNotifier, BackgroundTransferState>(
+  BackgroundTransferNotifier.new,
+);

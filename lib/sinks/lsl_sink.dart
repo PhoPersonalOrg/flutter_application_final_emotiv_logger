@@ -1,13 +1,22 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:lsl_flutter/lsl_flutter.dart';
+import 'package:liblsl/lsl.dart';
 
+import '../app/settings.dart';
 import '../domain/acquisition_health.dart';
 import '../domain/samples.dart';
 import 'sample_hub.dart';
 
-/// In-process LSL outlet. Creation failure → [LslSubsystemStatus.degraded], session continues.
+/// Normalizes the configured LSL outlet hostname, falling back to
+/// [AppSettings.defaultHostname] when empty or whitespace.
+String resolveLslHostname(String? raw) {
+  final trimmed = raw?.trim() ?? '';
+  return trimmed.isEmpty ? AppSettings.defaultHostname : trimmed;
+}
+
+/// In-process LSL outlets backed by vendored `liblsl`.
+/// Creation failure -> [LslSubsystemStatus.degraded], session continues.
 class LslSink {
   LslSink({
     required this.hub,
@@ -17,12 +26,18 @@ class LslSink {
   final SampleHub hub;
   final void Function(AcquisitionHealth Function(AcquisitionHealth)) onHealth;
 
-  OutletWorker? _worker;
-  StreamInfo? _eegInfo;
-  StreamInfo? _qualityInfo;
-  StreamInfo? _motionInfo;
-  StreamSubscription? _sub;
+  LSLStreamInfoWithMetadata? _eegInfo;
+  LSLStreamInfoWithMetadata? _qualityInfo;
+  LSLStreamInfoWithMetadata? _motionInfo;
+  LSLOutlet? _eegOutlet;
+  LSLOutlet? _qualityOutlet;
+  LSLOutlet? _motionOutlet;
+
+  StreamSubscription<void>? _sub;
+  Future<void>? _activeDrain;
+  bool _drainPending = false;
   bool _active = false;
+
   int _eegOk = 0;
   int _eegFail = 0;
   int _qualityOk = 0;
@@ -33,6 +48,7 @@ class LslSink {
   Future<LslSubsystemStatus> start({
     required bool enabled,
     required String sourceId,
+    String hostname = AppSettings.defaultHostname,
   }) async {
     await stop();
     if (!enabled) {
@@ -45,70 +61,114 @@ class LslSink {
       return LslSubsystemStatus.disabled;
     }
 
+    final effectiveHostname = resolveLslHostname(hostname);
+
     try {
       final platform = Platform.operatingSystem;
-      _eegInfo = StreamInfoFactory.createDoubleStreamInfo(
-        'Epoc X',
-        'EEG',
-        Float32ChannelFormat(),
+
+      _eegInfo = await LSL.createStreamInfo(
+        streamName: 'Epoc X',
+        streamType: LSLContentType.eeg,
         channelCount: EegSample.channelCount,
-        nominalSRate: EegSample.nominalRateHz,
+        sampleRate: EegSample.nominalRateHz,
+        channelFormat: LSLChannelFormat.float32,
         sourceId: sourceId,
+        hostname: effectiveHostname,
       );
-      _worker = await OutletWorker.spawn().timeout(
-        const Duration(seconds: 10),
+      _addChannelMetadata(
+        _eegInfo!,
+        labels: EegSample.channelNames,
+        unit: 'microvolts',
+        channelType: 'EEG',
       );
-      final eegAdded = await _worker!.addStream(_eegInfo!).timeout(
-        const Duration(seconds: 5),
-      );
-      if (!eegAdded) {
-        throw StateError('Failed to add EEG LSL stream');
-      }
+      _eegOutlet = await LSL
+          .createOutlet(
+            streamInfo: _eegInfo!,
+            chunkSize: 0,
+            maxBuffer: 360,
+          )
+          .timeout(const Duration(seconds: 10));
 
       try {
-        _qualityInfo = StreamInfoFactory.createDoubleStreamInfo(
-          EegSample.qualityStreamName,
-          EegSample.qualityStreamType,
-          Float32ChannelFormat(),
+        _qualityInfo = await LSL.createStreamInfo(
+          streamName: EegSample.qualityStreamName,
+          streamType: LSLContentType.custom(EegSample.qualityStreamType),
           channelCount: EegSample.channelCount,
-          nominalSRate: EegSample.nominalRateHz,
+          sampleRate: EegSample.nominalRateHz,
+          channelFormat: LSLChannelFormat.float32,
           sourceId: sourceId,
+          hostname: effectiveHostname,
         );
-        final qualityAdded = await _worker!
-            .addStream(_qualityInfo!)
+        _addChannelMetadata(
+          _qualityInfo!,
+          labels: EegSample.qualityChannelNames,
+          unit: 'cq',
+          channelType: 'CQ',
+        );
+        _qualityOutlet = await LSL
+            .createOutlet(
+              streamInfo: _qualityInfo!,
+              chunkSize: 0,
+              maxBuffer: 360,
+            )
             .timeout(const Duration(seconds: 5));
-        if (!qualityAdded) {
-          _qualityInfo = null;
-        }
       } catch (_) {
+        try {
+          await _qualityOutlet?.destroy();
+        } catch (_) {}
+        try {
+          _qualityInfo?.destroy();
+        } catch (_) {}
+        _qualityOutlet = null;
         _qualityInfo = null;
       }
 
       try {
-        _motionInfo = StreamInfoFactory.createDoubleStreamInfo(
-          'Epoc X Motion',
-          'Accelerometer',
-          Float32ChannelFormat(),
+        _motionInfo = await LSL.createStreamInfo(
+          streamName: 'Epoc X Motion',
+          streamType: LSLContentType.custom('Accelerometer'),
           channelCount: MotionSample.channelCount,
-          nominalSRate: MotionSample.nominalRateHz,
+          sampleRate: MotionSample.nominalRateHz,
+          channelFormat: LSLChannelFormat.float32,
           sourceId: sourceId,
+          hostname: effectiveHostname,
         );
-        await _worker!.addStream(_motionInfo!);
+        _addChannelMetadata(
+          _motionInfo!,
+          labels: MotionSample.channelNames,
+          unit: 'raw',
+          channelType: 'Accelerometer',
+        );
+        _motionOutlet = await LSL
+            .createOutlet(
+              streamInfo: _motionInfo!,
+              chunkSize: 0,
+              maxBuffer: 360,
+            )
+            .timeout(const Duration(seconds: 5));
       } catch (_) {
+        try {
+          await _motionOutlet?.destroy();
+        } catch (_) {}
+        try {
+          _motionInfo?.destroy();
+        } catch (_) {}
+        _motionOutlet = null;
         _motionInfo = null;
       }
 
       _active = true;
-      _sub = hub.lslAvailable.listen((_) => unawaited(_drain()));
+      _sub = hub.lslAvailable.listen((_) => _scheduleDrain());
+      _scheduleDrain();
       onHealth(
         (h) => h.copyWith(
           lslStatus: LslSubsystemStatus.active,
-          lslMessage: 'LSL active on $platform',
+          lslMessage: 'LSL active ($effectiveHostname) on $platform',
         ),
       );
       return LslSubsystemStatus.active;
     } catch (e) {
-      await _cleanupWorker();
+      await _cleanupOutlets();
       onHealth(
         (h) => h.copyWith(
           lslStatus: LslSubsystemStatus.degraded,
@@ -119,46 +179,86 @@ class LslSink {
     }
   }
 
-  Future<void> _drain() async {
-    if (!_active || _worker == null) return;
-    for (final s in hub.takeLslEeg()) {
-      var eegPushed = false;
-      try {
-        await _worker!.pushSample('Epoc X', s.values);
-        _eegOk++;
-        eegPushed = true;
-      } catch (_) {
-        _eegFail++;
+  void _addChannelMetadata(
+    LSLStreamInfoWithMetadata info, {
+    required List<String> labels,
+    required String unit,
+    required String channelType,
+  }) {
+    try {
+      final root = info.description.value;
+      final channels = root.addChildElement('channels');
+      for (final label in labels) {
+        final ch = channels.addChildElement('channel');
+        ch.addChildValue('label', label);
+        ch.addChildValue('unit', unit);
+        ch.addChildValue('type', channelType);
       }
-      if (eegPushed && _qualityInfo != null) {
+    } catch (_) {}
+  }
+
+  void _scheduleDrain() {
+    if (!_active) return;
+    if (_activeDrain != null) {
+      _drainPending = true;
+      return;
+    }
+    _activeDrain = _runDrainLoop().whenComplete(() {
+      _activeDrain = null;
+    });
+  }
+
+  Future<void> _runDrainLoop() async {
+    do {
+      _drainPending = false;
+      if (!_active || _eegOutlet == null) return;
+
+      for (final s in hub.takeLslEeg()) {
+        if (!_active || _eegOutlet == null) return;
+        var eegPushed = false;
         try {
-          await _worker!.pushSample(
-            EegSample.qualityStreamName,
-            s.qualityBroadcastValues(),
-          );
-          _qualityOk++;
+          await _eegOutlet!.pushSample(s.values);
+          _eegOk++;
+          eegPushed = true;
         } catch (_) {
-          _qualityFail++;
+          _eegFail++;
+        }
+        if (eegPushed && _qualityOutlet != null && _active) {
+          try {
+            await _qualityOutlet!.pushSample(s.qualityBroadcastValues());
+            _qualityOk++;
+          } catch (_) {
+            _qualityFail++;
+          }
         }
       }
-    }
-    if (_motionInfo != null) {
-      for (final s in hub.takeLslMotion()) {
-        try {
-          await _worker!.pushSample('Epoc X Motion', s.values);
-          _motionOk++;
-        } catch (_) {
-          _motionFail++;
+
+      if (_motionOutlet != null && _active) {
+        for (final s in hub.takeLslMotion()) {
+          if (!_active || _motionOutlet == null) return;
+          try {
+            await _motionOutlet!.pushSample(s.values);
+            _motionOk++;
+          } catch (_) {
+            _motionFail++;
+          }
         }
       }
-    }
+    } while (_drainPending && _active);
   }
 
   Future<void> stop() async {
     _active = false;
+    _drainPending = false;
     await _sub?.cancel();
     _sub = null;
-    await _cleanupWorker();
+    final inflight = _activeDrain;
+    if (inflight != null) {
+      try {
+        await inflight;
+      } catch (_) {}
+    }
+    await _cleanupOutlets();
     onHealth(
       (h) => h.copyWith(
         lslStatus: LslSubsystemStatus.idle,
@@ -170,27 +270,28 @@ class LslSink {
     _eegOk = _eegFail = _qualityOk = _qualityFail = _motionOk = _motionFail = 0;
   }
 
-  Future<void> _cleanupWorker() async {
+  Future<void> _cleanupOutlets() async {
     try {
-      if (_worker != null) {
-        if (_eegInfo != null) {
-          try {
-            await _worker!.removeStream('Epoc X');
-          } catch (_) {}
-        }
-        if (_qualityInfo != null) {
-          try {
-            await _worker!.removeStream(EegSample.qualityStreamName);
-          } catch (_) {}
-        }
-        if (_motionInfo != null) {
-          try {
-            await _worker!.removeStream('Epoc X Motion');
-          } catch (_) {}
-        }
-      }
+      await _eegOutlet?.destroy();
     } catch (_) {}
-    _worker = null;
+    try {
+      await _qualityOutlet?.destroy();
+    } catch (_) {}
+    try {
+      await _motionOutlet?.destroy();
+    } catch (_) {}
+    try {
+      _eegInfo?.destroy();
+    } catch (_) {}
+    try {
+      _qualityInfo?.destroy();
+    } catch (_) {}
+    try {
+      _motionInfo?.destroy();
+    } catch (_) {}
+    _eegOutlet = null;
+    _qualityOutlet = null;
+    _motionOutlet = null;
     _eegInfo = null;
     _qualityInfo = null;
     _motionInfo = null;
