@@ -1,0 +1,4 @@
+tags:
+  performance:
+    timeout: 10m
+  flaky:

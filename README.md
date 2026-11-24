@@ -46,6 +46,16 @@ cd ../ACTIVE_DEV/emotiv-lsl
 
 That writes `eeg_offline.csv` / `motion_offline.csv` (classification by payload length) and can emit `.epocxwire` for `main.py --replay`.
 
+Cross-client EEG parity (Flutter session → wire → Python / optional C++ LSL) lives in sibling **emotiv-lsl**:
+
+```bash
+cd ../emotiv-lsl
+python -m tests.test_client_compat_flutter
+python -m tests.test_client_compat_inventory   # documents Flutter LSL divergences
+```
+
+In-app Mode-7 crypto gate: `flutter test test/crypto_codec_test.dart`.
+
 ## Sessions tab (transfer)
 
 Bottom nav **Sessions** lists prior `session_*` folders. Multi-select and transfer over **SFTP** (`dartssh2`), **SMB** (`dart_smb2`), or **Dropbox** (App Folder) to a remembered destination. Server bookmarks store host/user/path in SharedPreferences (optional password in secure storage). The live recording folder is not transferable/deletable while acquisition is open. SFTP over Tailscale is the usual path; SMB on LAN may need Local Network permission on iOS.
@@ -103,12 +113,13 @@ Packet layouts, channel order and scale factors follow the EmotivPRO V4 Android 
 
 ## LSL
 
-In-process outlets via `lsl_flutter` only:
+In-process outlets via vendored `liblsl` (`packages/liblsl`), advertising the configured **Hostname** from Settings (default `iPhone`, shown in LabRecorder as `Epoc X (iPhone)`):
 
 | Stream | Type | Channels | Rate |
 |--------|------|----------|------|
 | Epoc X | EEG | 14 | 128 Hz |
 | Epoc X Motion | Accelerometer | 10 (Q0–Q3, Acc XYZ, Mag XYZ) | 16 Hz |
+| Epoc X eQuality | Raw | 14 (broadcast Mode-7 CQ 0–127) | 128 Hz |
 
 If outlet creation fails (e.g. Android `liblsl.so`), LSL becomes **Degraded** and acquisition + CSV continue.
 
@@ -136,6 +147,24 @@ fvm flutter pub get
 ```
 
 Android builds require **JDK 17+** (Java 25 works with this project's Gradle **9.3.1** / AGP **9.1.1**). Prefer `fvm flutter` so the pin matches the build.
+
+## Codemagic iOS build numbers
+
+App Store Connect rejects uploads that reuse `CFBundleVersion` (the `+N` in `pubspec.yaml` `version: x.y.z+N`). Bump happens automatically when the Codemagic **iOS+Deploy** workflow runs this pre-build script:
+
+1. Codemagic → app → **Environment variables** → add `APP_APPLE_ID` (App Store Connect → your app → **App Information** → **Apple ID**). Do **not** set `FLUTTER_BUILD_NUMBER` or `FLUTTER_BUILD_NAME` as env vars — Flutter reserves them and aborts the build.
+2. Workflow **iOS+Deploy** → **Build** → **Pre-build script**:
+
+```bash
+chmod +x scripts/codemagic_bump_build_number.sh
+./scripts/codemagic_bump_build_number.sh
+```
+
+3. Flutter build arguments (recommended): `--build-number=$NEW_BUILD_NUMBER --dart-define=BUILD_TIME=$BUILD_TIME`
+
+The script sets `NEW_BUILD_NUMBER` to `max(ASC/TestFlight latest+1, PROJECT_BUILD_NUMBER/BUILD_NUMBER, pubspec+1)`, writes it and `BUILD_TIME` (UTC ISO-8601 for the Record-screen build caption) to `$CM_ENV`, and rewrites `pubspec.yaml`’s `+N` in the CI workspace so the IPA still bumps even if the Flutter build-args field is missing. ASC queries use `--all-versions` so a higher build on an older marketing version still floors the next number.
+
+**Verify a green build actually bumped:** in the Codemagic log, find `Using build number:` / `Updated pubspec.yaml version to` and confirm TestFlight shows that `CFBundleVersion`. If you see `Skipping ASC lookup`, add `APP_APPLE_ID`.
 
 ## Build / run
 

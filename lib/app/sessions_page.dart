@@ -1,10 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../sessions/dropbox_config.dart';
+import '../sessions/background_transfer.dart';
 import '../sessions/server_bookmark.dart';
 import '../sessions/session_library.dart';
-import '../sessions/session_transfer.dart';
 import 'bookmarks_page.dart';
 import 'providers.dart';
 import 'settings_page.dart';
@@ -17,7 +18,10 @@ String _formatStarted(DateTime? dt) {
       '${two(l.hour)}:${two(l.minute)}';
 }
 
-/// Lists prior CSV sessions and transfers them via SFTP/SMB/Dropbox.
+/// Lists prior CSV sessions and transfers them asynchronously via SFTP/SMB/Dropbox.
+///
+/// Local CSV files are always retained on device; only explicit user [Delete]
+/// removes local sessions.
 class SessionsPage extends ConsumerStatefulWidget {
   const SessionsPage({super.key});
 
@@ -32,6 +36,16 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
   @override
   Widget build(BuildContext context) {
     final sessionsAsync = ref.watch(sessionListProvider);
+    final transferState = ref.watch(backgroundTransferProvider);
+
+    ref.listen<BackgroundTransferState>(backgroundTransferProvider, (prev, next) {
+      final report = next.lastReport;
+      if (report != null && !identical(prev?.lastReport, report) && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(report.summaryLine())),
+        );
+      }
+    });
 
     return Scaffold(
       appBar: AppBar(
@@ -58,6 +72,11 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
             ),
           ] else ...[
             IconButton(
+              tooltip: 'Sync All',
+              onPressed: _syncAll,
+              icon: const Icon(Icons.sync),
+            ),
+            IconButton(
               tooltip: 'Select',
               onPressed: () => setState(() => _selectMode = true),
               icon: const Icon(Icons.checklist),
@@ -76,79 +95,88 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
           ],
         ],
       ),
-      body: sessionsAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Error: $e')),
-        data: (sessions) {
-          if (sessions.isEmpty) {
-            return RefreshIndicator(
-              onRefresh: () =>
-                  ref.read(sessionListProvider.notifier).refresh(),
-              child: ListView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                children: const [
-                  SizedBox(height: 120),
-                  Center(
-                    child: Text(
-                      'No recording sessions yet.\nConnect a headset on the Record tab.',
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                ],
-              ),
-            );
-          }
-
-          return RefreshIndicator(
-            onRefresh: () => ref.read(sessionListProvider.notifier).refresh(),
-            child: ListView.builder(
-              itemCount: sessions.length,
-              itemBuilder: (context, i) {
-                final s = sessions[i];
-                final selected = _selected.contains(s.path);
-                final subtitle = [
-                  _formatStarted(s.startedAt),
-                  s.sizeLabel,
-                  if (s.isActive) 'recording',
-                ].join(' · ');
-
-                return ListTile(
-                  leading: _selectMode
-                      ? Checkbox(
-                          value: selected,
-                          onChanged: s.isActive
-                              ? null
-                              : (v) => _toggle(s.path, v ?? false),
-                        )
-                      : Icon(
-                          s.isActive
-                              ? Icons.fiber_manual_record
-                              : Icons.folder,
-                          color: s.isActive ? Colors.red : null,
+      body: Column(
+        children: [
+          if (transferState.hasVisibleBanner)
+            _BackgroundTransferBanner(state: transferState),
+          Expanded(
+            child: sessionsAsync.when(
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) => Center(child: Text('Error: $e')),
+              data: (sessions) {
+                if (sessions.isEmpty) {
+                  return RefreshIndicator(
+                    onRefresh: () =>
+                        ref.read(sessionListProvider.notifier).refresh(),
+                    child: ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      children: const [
+                        SizedBox(height: 120),
+                        Center(
+                          child: Text(
+                            'No recording sessions yet.\nConnect a headset on the Record tab.',
+                            textAlign: TextAlign.center,
+                          ),
                         ),
-                  title: Text(s.deviceName),
-                  subtitle: Text('$subtitle\n${s.folderName}'),
-                  isThreeLine: true,
-                  enabled: !s.isActive || !_selectMode,
-                  onTap: () {
-                    if (_selectMode) {
-                      if (!s.isActive) _toggle(s.path, !selected);
-                      return;
-                    }
-                    _showSessionActions(s);
-                  },
-                  onLongPress: () {
-                    if (s.isActive) return;
-                    setState(() {
-                      _selectMode = true;
-                      _selected.add(s.path);
-                    });
-                  },
+                      ],
+                    ),
+                  );
+                }
+
+                return RefreshIndicator(
+                  onRefresh: () =>
+                      ref.read(sessionListProvider.notifier).refresh(),
+                  child: ListView.builder(
+                    itemCount: sessions.length,
+                    itemBuilder: (context, i) {
+                      final s = sessions[i];
+                      final selected = _selected.contains(s.path);
+                      final subtitle = [
+                        _formatStarted(s.startedAt),
+                        s.sizeLabel,
+                        if (s.isActive) 'recording',
+                      ].join(' · ');
+
+                      return ListTile(
+                        leading: _selectMode
+                            ? Checkbox(
+                                value: selected,
+                                onChanged: s.isActive
+                                    ? null
+                                    : (v) => _toggle(s.path, v ?? false),
+                              )
+                            : Icon(
+                                s.isActive
+                                    ? Icons.fiber_manual_record
+                                    : Icons.folder,
+                                color: s.isActive ? Colors.red : null,
+                              ),
+                        title: Text(s.deviceName),
+                        subtitle: Text('$subtitle\n${s.folderName}'),
+                        isThreeLine: true,
+                        enabled: !s.isActive || !_selectMode,
+                        onTap: () {
+                          if (_selectMode) {
+                            if (!s.isActive) _toggle(s.path, !selected);
+                            return;
+                          }
+                          _showSessionActions(s);
+                        },
+                        onLongPress: () {
+                          if (s.isActive) return;
+                          setState(() {
+                            _selectMode = true;
+                            _selected.add(s.path);
+                          });
+                        },
+                      );
+                    },
+                  ),
                 );
               },
             ),
-          );
-        },
+          ),
+        ],
       ),
     );
   }
@@ -245,6 +273,161 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
     await ref.read(sessionListProvider.notifier).refresh();
   }
 
+  /// Upload every finished session to every ready destination (Dropbox + bookmarks
+  /// with a remembered password). Bookmarks without a password are reported skipped.
+  Future<void> _syncAll() async {
+    final sessions = ref.read(sessionListProvider).value ?? const [];
+    final paths =
+        sessions.where((s) => !s.isActive).map((s) => s.path).toList();
+    if (paths.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No finished sessions to sync')),
+      );
+      return;
+    }
+
+    final bookmarkState = await ref.read(bookmarkStoreProvider.future);
+    final dropboxLinked = await ref.read(dropboxSyncProvider).isLinked();
+    if (!mounted) return;
+
+    final readyBookmarks = <({ServerBookmark bookmark, String password})>[];
+    final skippedNoPassword = <String>[];
+    for (final b in bookmarkState.bookmarks) {
+      final password =
+          await ref.read(bookmarkStoreProvider.notifier).readPassword(b.id);
+      if (password != null && password.isNotEmpty) {
+        readyBookmarks.add((bookmark: b, password: password));
+      } else {
+        skippedNoPassword.add(b.name);
+      }
+    }
+
+    if (!dropboxLinked && readyBookmarks.isEmpty) {
+      await _promptNoDestinations();
+      return;
+    }
+
+    final destinationLines = <String>[
+      if (dropboxLinked) 'Dropbox (App Folder)',
+      for (final e in readyBookmarks)
+        '${e.bookmark.name} (${e.bookmark.protocol.label})',
+    ];
+    final skippedLines = [
+      for (final name in skippedNoPassword) '$name (no password)',
+    ];
+
+    if (!mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Sync All'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Upload ${paths.length} session'
+                '${paths.length == 1 ? '' : 's'} to:',
+              ),
+              const SizedBox(height: 8),
+              for (final line in destinationLines) Text('• $line'),
+              if (skippedLines.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                const Text('Skipped destinations:'),
+                for (final line in skippedLines) Text('• $line'),
+              ],
+              const SizedBox(height: 12),
+              const Text(
+                'Identical files already on Dropbox/SMB are skipped. '
+                'Transfers run in the background.',
+                style: TextStyle(fontSize: 12, color: Colors.black54),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Sync All'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final notifier = ref.read(backgroundTransferProvider.notifier);
+    if (dropboxLinked) {
+      final remoteRoot = ref.read(settingsProvider).dropboxRemoteRoot;
+      notifier.enqueueDropbox(sessionPaths: paths, remoteRoot: remoteRoot);
+    }
+    for (final entry in readyBookmarks) {
+      notifier.enqueueBookmark(
+        bookmark: entry.bookmark,
+        password: entry.password,
+        sessionPaths: paths,
+      );
+    }
+
+    final queued = [
+      if (dropboxLinked) 'Dropbox',
+      ...readyBookmarks.map((e) => e.bookmark.name),
+    ];
+    final skipNote = skippedNoPassword.isEmpty
+        ? ''
+        : '; skipped ${skippedNoPassword.join(', ')} (no password)';
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Queued sync of ${paths.length} session'
+          '${paths.length == 1 ? '' : 's'} to ${queued.join(', ')}$skipNote',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _promptNoDestinations() async {
+    final action = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('No transfer destinations'),
+        content: const Text(
+          'Connect Dropbox in Settings or add an SFTP/SMB bookmark.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, 'settings'),
+            child: const Text('Settings'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, 'bookmark'),
+            child: const Text('Add bookmark'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (action == 'bookmark') {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const BookmarksPage()),
+      );
+    } else if (action == 'settings') {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
+      );
+    }
+  }
+
   Future<void> _transferSelected() async {
     final paths = _selected.toList();
     if (paths.isEmpty) return;
@@ -255,50 +438,18 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
 
     final hasBookmarks = bookmarkState.bookmarks.isNotEmpty;
     if (!hasBookmarks && !dropboxLinked) {
-      final action = await showDialog<String>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('No transfer destinations'),
-          content: const Text(
-            'Connect Dropbox in Settings or add an SFTP/SMB bookmark.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, 'settings'),
-              child: const Text('Settings'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, 'bookmark'),
-              child: const Text('Add bookmark'),
-            ),
-          ],
-        ),
-      );
-      if (!mounted) return;
-      if (action == 'bookmark') {
-        await Navigator.of(context).push(
-          MaterialPageRoute<void>(builder: (_) => const BookmarksPage()),
-        );
-      } else if (action == 'settings') {
-        await Navigator.of(context).push(
-          MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
-        );
-      }
+      await _promptNoDestinations();
       return;
     }
 
-    ServerBookmark? chosen =
-        hasBookmarks ? (bookmarkState.lastUsed ?? bookmarkState.bookmarks.first) : null;
+    ServerBookmark? chosen = hasBookmarks
+        ? (bookmarkState.lastUsed ?? bookmarkState.bookmarks.first)
+        : null;
     var password = '';
     if (chosen != null && chosen.rememberPassword) {
-      password = await ref
-              .read(bookmarkStoreProvider.notifier)
-              .readPassword(chosen.id) ??
-          '';
+      password =
+          await ref.read(bookmarkStoreProvider.notifier).readPassword(chosen.id) ??
+              '';
     }
 
     if (!mounted) return;
@@ -315,208 +466,160 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
     );
     if (result == null || !mounted) return;
 
+    // Exit selection mode immediately and run the upload asynchronously in the
+    // background so navigation and recording are never blocked.
+    setState(() {
+      _selected.clear();
+      _selectMode = false;
+    });
+
     if (result.useDropbox) {
-      await _runDropboxTransfer(sessionPaths: paths);
+      final remoteRoot = ref.read(settingsProvider).dropboxRemoteRoot;
+      ref.read(backgroundTransferProvider.notifier).enqueueDropbox(
+            sessionPaths: paths,
+            remoteRoot: remoteRoot,
+          );
       return;
     }
 
     final bookmark = result.bookmark!;
-    await ref.read(bookmarkStoreProvider.notifier).setLastUsed(bookmark.id);
-    await _runTransfer(
-      bookmark: bookmark,
-      password: result.password,
-      sessionPaths: paths,
-      rememberPassword: result.rememberPassword,
-    );
+    if (result.rememberPassword) {
+      unawaited(
+        ref.read(bookmarkStoreProvider.notifier).upsert(
+              bookmark.copyWith(rememberPassword: true),
+              password: result.password,
+            ),
+      );
+    }
+    unawaited(ref.read(bookmarkStoreProvider.notifier).setLastUsed(bookmark.id));
+    ref.read(backgroundTransferProvider.notifier).enqueueBookmark(
+          bookmark: bookmark,
+          password: result.password,
+          sessionPaths: paths,
+        );
   }
+}
 
-  Future<void> _runDropboxTransfer({required List<String> sessionPaths}) async {
-    var cancelled = false;
-    final progress = ValueNotifier<TransferProgress?>(null);
-    final remoteRoot = ref.read(settingsProvider).dropboxRemoteRoot;
+class _BackgroundTransferBanner extends ConsumerWidget {
+  const _BackgroundTransferBanner({required this.state});
 
-    if (!mounted) return;
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        return ValueListenableBuilder<TransferProgress?>(
-          valueListenable: progress,
-          builder: (ctx, p, _) {
-            return AlertDialog(
-              title: const Text('Uploading to Dropbox'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
+  final BackgroundTransferState state;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final notifier = ref.read(backgroundTransferProvider.notifier);
+    if (state.isRunning) {
+      final p = state.progress;
+      final queuedSuffix =
+          state.queuedJobs > 0 ? ' (+${state.queuedJobs} queued)' : '';
+      final detail = p == null
+          ? 'Connecting…'
+          : (p.error != null
+              ? 'Error on ${p.fileName.isEmpty ? p.sessionFolder : "${p.sessionFolder}/${p.fileName}"} — continuing…'
+              : (p.fileName.isEmpty
+                  ? '${p.sessionFolder} · finishing…'
+                  : p.skipped
+                      ? '${p.sessionFolder}/${p.fileName} skipped (${p.fileIndex}/${p.fileCount})'
+                      : '${p.sessionFolder}/${p.fileName} (${p.fileIndex}/${p.fileCount})'));
+
+      return Card(
+        margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
                 children: [
-                  if (p == null)
-                    const Text('Connecting…')
-                  else ...[
-                    Text(p.sessionFolder),
-                    Text(
-                      p.fileName.isEmpty
-                          ? 'Finishing…'
-                          : '${p.fileName} (${p.fileIndex}/${p.fileCount})',
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Uploading to ${state.activeDestination ?? "server"}$queuedSuffix',
+                      style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
-                    const SizedBox(height: 12),
-                    LinearProgressIndicator(
-                      value: p.bytesTotal > 0 ? p.fraction : null,
-                    ),
-                  ],
+                  ),
+                  TextButton(
+                    onPressed: notifier.cancelActive,
+                    child: const Text('Cancel'),
+                  ),
                 ],
               ),
-              actions: [
-                TextButton(
-                  onPressed: () => cancelled = true,
-                  child: const Text('Cancel'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-
-    String? error;
-    try {
-      if (!DropboxConfig.isConfigured) {
-        throw StateError('Dropbox app key not configured (see README)');
-      }
-      await ref.read(dropboxSyncProvider).uploadSessions(
-            sessionPaths,
-            remoteRoot: remoteRoot,
-            isCancelled: () => cancelled,
-            onProgress: (p) => progress.value = p,
-          );
-    } on TransferCancelled {
-      error = 'Cancelled';
-    } catch (e) {
-      error = '$e';
-    }
-
-    progress.dispose();
-    if (mounted && Navigator.of(context).canPop()) {
-      Navigator.of(context).pop();
-    }
-    if (!mounted) return;
-
-    if (error == null && !cancelled) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Uploaded ${sessionPaths.length} session'
-            '${sessionPaths.length == 1 ? '' : 's'} to Dropbox',
+              Text(
+                detail,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+              const SizedBox(height: 6),
+              LinearProgressIndicator(
+                value: (p != null && p.bytesTotal > 0) ? p.fraction : null,
+              ),
+            ],
           ),
         ),
       );
-      setState(() {
-        _selected.clear();
-        _selectMode = false;
-      });
-    } else if (error != null && error != 'Cancelled') {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Dropbox upload failed: $error')),
-      );
-    }
-  }
-
-  Future<void> _runTransfer({
-    required ServerBookmark bookmark,
-    required String password,
-    required List<String> sessionPaths,
-    required bool rememberPassword,
-  }) async {
-    if (rememberPassword) {
-      await ref.read(bookmarkStoreProvider.notifier).upsert(
-            bookmark.copyWith(rememberPassword: true),
-            password: password,
-          );
     }
 
-    var cancelled = false;
-    final progress = ValueNotifier<TransferProgress?>(null);
+    final report = state.lastReport;
+    if (report == null) return const SizedBox.shrink();
 
-    if (!mounted) return;
-    showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        return ValueListenableBuilder<TransferProgress?>(
-          valueListenable: progress,
-          builder: (ctx, p, _) {
-            return AlertDialog(
-              title: const Text('Transferring'),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
+    final hasIssues = report.hasFailures || report.cancelled;
+    return Card(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      color: hasIssues ? Colors.orange.shade50 : null,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 8, 6, 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Icon(
+                hasIssues
+                    ? Icons.warning_amber_rounded
+                    : Icons.check_circle_outline,
+                size: 20,
+                color: hasIssues
+                    ? Colors.orange.shade900
+                    : Colors.green.shade700,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (p == null)
-                    const Text('Connecting…')
-                  else ...[
-                    Text(p.sessionFolder),
-                    Text(
-                      p.fileName.isEmpty
-                          ? 'Finishing…'
-                          : '${p.fileName} (${p.fileIndex}/${p.fileCount})',
+                  Text(
+                    report.summaryLine(),
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                  if (report.failures.length > 1)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        report.failures
+                            .skip(1)
+                            .take(2)
+                            .map((f) => f.label)
+                            .join('\n'),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
                     ),
-                    const SizedBox(height: 12),
-                    LinearProgressIndicator(
-                      value: p.bytesTotal > 0 ? p.fraction : null,
-                    ),
-                  ],
                 ],
               ),
-              actions: [
-                TextButton(
-                  onPressed: () => cancelled = true,
-                  child: const Text('Cancel'),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-
-    String? error;
-    try {
-      await SessionTransfer.uploadSessions(
-        bookmark: bookmark,
-        password: password,
-        sessionPaths: sessionPaths,
-        isCancelled: () => cancelled,
-        onProgress: (p) => progress.value = p,
-      );
-    } on TransferCancelled {
-      error = 'Cancelled';
-    } catch (e) {
-      error = '$e';
-    }
-
-    progress.dispose();
-    if (mounted && Navigator.of(context).canPop()) {
-      Navigator.of(context).pop();
-    }
-    if (!mounted) return;
-
-    if (error == null && !cancelled) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Transferred ${sessionPaths.length} session'
-            '${sessionPaths.length == 1 ? '' : 's'} to ${bookmark.name}',
-          ),
+            ),
+            IconButton(
+              tooltip: 'Dismiss',
+              onPressed: notifier.dismissReport,
+              icon: const Icon(Icons.close, size: 18),
+            ),
+          ],
         ),
-      );
-      setState(() {
-        _selected.clear();
-        _selectMode = false;
-      });
-    } else if (error != null && error != 'Cancelled') {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Transfer failed: $error')),
-      );
-    }
+      ),
+    );
   }
 }
 
@@ -648,7 +751,7 @@ class _TransferConfirmDialogState extends State<_TransferConfirmDialog> {
             const Padding(
               padding: EdgeInsets.only(top: 12),
               child: Text(
-                'Uploads into your Dropbox App Folder (see Settings for path).',
+                'Uploads in background to your Dropbox App Folder (local files are kept).',
                 style: TextStyle(fontSize: 12, color: Colors.black54),
               ),
             ),
@@ -674,7 +777,7 @@ class _TransferConfirmDialogState extends State<_TransferConfirmDialog> {
               ),
             );
           },
-          child: const Text('Transfer'),
+          child: const Text('Transfer in background'),
         ),
       ],
     );

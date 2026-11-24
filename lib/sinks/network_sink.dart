@@ -12,10 +12,14 @@ class NetworkSink {
   NetworkSink({
     required this.hub,
     required this.onHealth,
-  });
+    this.lookupTimeout = const Duration(seconds: 5),
+    Future<List<InternetAddress>> Function(String host)? hostLookup,
+  }) : _hostLookup = hostLookup ?? InternetAddress.lookup;
 
   final SampleHub hub;
   final void Function(AcquisitionHealth Function(AcquisitionHealth)) onHealth;
+  final Duration lookupTimeout;
+  final Future<List<InternetAddress>> Function(String host) _hostLookup;
 
   String? deviceId;
   InternetAddress? _remote;
@@ -28,12 +32,19 @@ class NetworkSink {
   StreamSubscription? _sub;
   bool _draining = false;
 
+  /// Bumped on every [configure] and [stop] so late async completions from an
+  /// abandoned DNS/socket attempt never resurrect sockets or overwrite health.
+  int _configGen = 0;
+
   Future<void> configure({
     required AppSettings settings,
     String? deviceId,
   }) async {
+    final gen = ++_configGen;
     this.deviceId = deviceId;
-    await stop();
+    await _closeCurrent();
+    if (_configGen != gen) return;
+
     if (!settings.useNetworkStream) {
       onHealth(
         (h) => h.copyWith(
@@ -57,17 +68,42 @@ class NetworkSink {
     );
 
     try {
-      _remote = InternetAddress.tryParse(settings.networkHost) ??
-          (await InternetAddress.lookup(settings.networkHost)).first;
-      if (_protocol == NetworkProtocol.udp) {
-        _udp = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+      InternetAddress resolved;
+      final parsed = InternetAddress.tryParse(settings.networkHost);
+      if (parsed != null) {
+        resolved = parsed;
       } else {
-        _tcp = await Socket.connect(
-          settings.networkHost,
+        final addrs =
+            await _hostLookup(settings.networkHost).timeout(lookupTimeout);
+        if (_configGen != gen) return;
+        if (addrs.isEmpty) {
+          throw SocketException(
+            'Failed host lookup: \'${settings.networkHost}\' (no addresses)',
+          );
+        }
+        resolved = addrs.first;
+      }
+
+      if (_protocol == NetworkProtocol.udp) {
+        final sock = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+        if (_configGen != gen) {
+          sock.close();
+          return;
+        }
+        _udp = sock;
+      } else {
+        final sock = await Socket.connect(
+          resolved,
           _port,
           timeout: const Duration(seconds: 5),
         );
-        _tcp!.done.then((_) {
+        if (_configGen != gen) {
+          await sock.close();
+          return;
+        }
+        _tcp = sock;
+        sock.done.then((_) {
+          if (_configGen != gen) return;
           _connected = false;
           onHealth(
             (h) => h.copyWith(
@@ -77,6 +113,8 @@ class NetworkSink {
           );
         });
       }
+
+      _remote = resolved;
       _connected = true;
       _sub = hub.networkAvailable.listen((_) {
         if (!_draining) {
@@ -88,10 +126,11 @@ class NetworkSink {
           networkEnabled: true,
           networkConnected: true,
           networkMessage:
-              'Streaming to ${_remote!.address}:$_port (${_protocol.name})',
+              'Streaming to ${resolved.address}:$_port (${_protocol.name})',
         ),
       );
     } catch (e) {
+      if (_configGen != gen) return;
       _connected = false;
       onHealth(
         (h) => h.copyWith(
@@ -172,8 +211,14 @@ class NetworkSink {
   }
 
   Future<void> stop() async {
+    _configGen++;
+    await _closeCurrent();
+  }
+
+  Future<void> _closeCurrent() async {
     _enabled = false;
     _connected = false;
+    _remote = null;
     await _sub?.cancel();
     _sub = null;
     _udp?.close();

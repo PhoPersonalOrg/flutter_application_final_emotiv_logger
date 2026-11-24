@@ -22,6 +22,7 @@ import '../sinks/network_sink.dart';
 import '../sinks/sample_hub.dart';
 import 'ble_fsm_policy.dart';
 import 'session_subscriptions.dart';
+import 'streaming_foreground_service.dart';
 
 /// Owns the BLE acquisition FSM, decode pipeline, and sinks.
 class AcquisitionSession {
@@ -39,7 +40,7 @@ class AcquisitionSession {
     _hub = SampleHub(onHealth: _mutateHealth);
     _csv = CsvSink(hub: _hub);
     _lsl = LslSink(hub: _hub, onHealth: _mutateHealth);
-    _network = NetworkSink(hub: _hub, onHealth: _mutateHealth);
+    _network = NetworkSink(hub: _hub, onHealth: _mutateAndPublishHealth);
     _liveSync = liveSync ??
         LiveSessionSync(
           dropbox: dropboxSync ?? DropboxSync(),
@@ -114,14 +115,31 @@ class AcquisitionSession {
   int get scanSubscriptionCountForTest => _scanSubs.length;
 
   Future<void> updateSettings(AppSettings settings) async {
+    final prev = _settings;
     _settings = settings;
     _preferredId = settings.preferredDeviceId ?? _preferredId;
     _preferredName = settings.preferredDeviceName ?? _preferredName;
     if (_state is AcquisitionStreaming || _state is AcquisitionPreparing) {
-      await _network.configure(
-        settings: settings,
-        deviceId: _identity?.btKeyHex,
+      unawaited(
+        _network.configure(
+          settings: settings,
+          deviceId: _identity?.btKeyHex,
+        ),
       );
+      if (_state is AcquisitionStreaming &&
+          _device != null &&
+          (prev.lslEnabled != settings.lslEnabled ||
+              prev.hostname.trim() != settings.hostname.trim())) {
+        unawaited(
+          _lsl
+              .start(
+                enabled: settings.lslEnabled,
+                sourceId: _device!.remoteId.str,
+                hostname: settings.hostname,
+              )
+              .then((_) => _refreshStreamingHealth()),
+        );
+      }
     }
   }
 
@@ -255,11 +273,13 @@ class AcquisitionSession {
 
   Future<void> disconnect() async {
     _userStopRequested = true;
-    _bumpEpoch();
+    final epoch = _bumpEpoch();
     await _cancelReconnect();
     await _orderedTeardown(disconnectBle: true);
     _mutateHealth((h) => h.copyWith(clearBatteryPercent: true));
     _emit(AcquisitionIdle(health: _health));
+    // Stop FGS after CSV flush/teardown so the process is not demoted mid-flush.
+    await StreamingForegroundService.ensureStopped(epoch: epoch);
   }
 
   Future<void> flush() async {
@@ -274,10 +294,11 @@ class AcquisitionSession {
 
   Future<void> dispose() async {
     _userStopRequested = true;
-    _bumpEpoch();
+    final epoch = _bumpEpoch();
     await _cancelReconnect();
     await _stopScanRadio();
     await _orderedTeardown(disconnectBle: true);
+    await StreamingForegroundService.ensureStopped(epoch: epoch);
     await _liveSync.dispose();
     await _decode.dispose();
     await _hub.dispose();
@@ -298,6 +319,11 @@ class AcquisitionSession {
         deviceName: device.platformName,
         health: _health,
       ),
+    );
+    // Pin the process for connect+prepare+stream (kept through Reconnecting).
+    await StreamingForegroundService.ensureStarted(
+      device.platformName,
+      epoch: epoch,
     );
     try {
       // Drop any half-open OS link before a fresh connect attempt.
@@ -370,7 +396,6 @@ class AcquisitionSession {
       // CSV is first-class but must never abort BLE arming.
       var sessionPath = '';
       try {
-        await _liveSync.stop(timeout: const Duration(seconds: 5));
         final csvStart = await _csv.startSession(
           saveDirectory: _settings.saveDirectory,
           identity: _identity!,
@@ -382,13 +407,6 @@ class AcquisitionSession {
             csvSessionPath: csvStart.sessionPath,
             csvMessage: csvStart.message,
             csvUsingFallback: csvStart.usedFallback,
-          ),
-        );
-        unawaited(
-          _liveSync.start(
-            sessionPath: sessionPath,
-            settings: _settings,
-            flushCsv: _csv.flush,
           ),
         );
       } catch (e) {
@@ -403,10 +421,7 @@ class AcquisitionSession {
       await _lsl.start(
         enabled: _settings.lslEnabled,
         sourceId: device.remoteId.str,
-      );
-      await _network.configure(
-        settings: _settings,
-        deviceId: _identity!.btKeyHex,
+        hostname: _settings.hostname,
       );
       if (!_isEpochCurrent(epoch)) return;
 
@@ -425,15 +440,40 @@ class AcquisitionSession {
       );
 
       if (!_isEpochCurrent(epoch)) return;
+      final streamingName = name.isEmpty ? _identity!.deviceName : name;
       _emit(
         AcquisitionStreaming(
-          deviceName: name.isEmpty ? _identity!.deviceName : name,
+          deviceName: streamingName,
           sessionDir: sessionPath.isEmpty
               ? (_health.csvSessionPath ?? '(no csv)')
               : sessionPath,
           health: _health,
         ),
       );
+
+      // Idempotent: covers reconnect path that skips Connecting.
+      await StreamingForegroundService.ensureStarted(
+        streamingName,
+        epoch: epoch,
+      );
+
+      // Network streaming and remote session sync are best-effort and must
+      // never gate BLE/CSV startup.
+      unawaited(
+        _network.configure(
+          settings: _settings,
+          deviceId: _identity!.btKeyHex,
+        ),
+      );
+      if (sessionPath.isNotEmpty) {
+        unawaited(
+          _liveSync.start(
+            sessionPath: sessionPath,
+            settings: _settings,
+            flushCsv: _csv.flush,
+          ),
+        );
+      }
     } catch (e) {
       if (!_isEpochCurrent(epoch)) return;
       await _orderedTeardown(disconnectBle: true);
@@ -700,6 +740,7 @@ class AcquisitionSession {
           health: _health.copyWith(reconnectAttempt: _reconnectAttempt),
         ),
       );
+      await StreamingForegroundService.ensureStopped(epoch: currentEpoch);
       return;
     }
 
@@ -860,6 +901,7 @@ class AcquisitionSession {
             health: _health,
           ),
         );
+        unawaited(StreamingForegroundService.ensureStopped(epoch: _opEpoch));
         return false;
       }
     } catch (_) {}
@@ -884,6 +926,7 @@ class AcquisitionSession {
           health: _health,
         ),
       );
+      unawaited(StreamingForegroundService.ensureStopped(epoch: _opEpoch));
       return false;
     }
     return true;
@@ -988,6 +1031,8 @@ class AcquisitionSession {
         health: _health,
       ),
     );
+    // Soft connect/prepare failure: drop FGS (fire-and-forget).
+    unawaited(StreamingForegroundService.ensureStopped(epoch: _opEpoch));
   }
 
   Future<void> _tryAutoConnectPreferred() async {
@@ -1081,13 +1126,8 @@ class AcquisitionSession {
     try {
       await _csv.stop();
     } catch (_) {}
-    try {
-      await _liveSync.stop(
-        timeout: disconnectBle
-            ? const Duration(seconds: 45)
-            : const Duration(seconds: 15),
-      );
-    } catch (_) {}
+    // Detach remote finalization so BLE disconnect/reconnect never blocks.
+    unawaited(_liveSync.stop(timeout: const Duration(seconds: 60)));
     try {
       await _lsl.stop();
     } catch (_) {}
@@ -1124,6 +1164,17 @@ class AcquisitionSession {
       _emit(AcquisitionIdle(health: _health));
     } else if (s is AcquisitionStopping) {
       _emit(AcquisitionStopping(deviceName: s.deviceName, health: _health));
+    } else if (s is AcquisitionScanning) {
+      _emit(s.copyWith(health: _health));
+    } else if (s is AcquisitionReconnecting) {
+      _emit(
+        AcquisitionReconnecting(
+          deviceName: s.deviceName,
+          attempt: s.attempt,
+          nextRetryIn: s.nextRetryIn,
+          health: _health,
+        ),
+      );
     }
   }
 
@@ -1131,6 +1182,13 @@ class AcquisitionSession {
     AcquisitionHealth Function(AcquisitionHealth) fn,
   ) {
     _health = fn(_health);
+  }
+
+  void _mutateAndPublishHealth(
+    AcquisitionHealth Function(AcquisitionHealth) fn,
+  ) {
+    _mutateHealth(fn);
+    _refreshStreamingHealth();
   }
 
   void _emit(AcquisitionState next) {

@@ -16,7 +16,7 @@ class SampleHub {
     this.csvCapacity = 2048,
     this.lslCapacity = 2048,
     this.networkCapacity = 256,
-    this.uiCapacity = 32,
+    this.uiCapacity = 256,
     required this.onHealth,
   });
 
@@ -80,7 +80,7 @@ class SampleHub {
   List<MotionSample> takeLslMotion({int max = 64}) => _take(_lslMotion, max);
   List<EegSample> takeNetworkEeg({int max = 32}) => _take(_netEeg, max);
   List<MotionSample> takeNetworkMotion({int max = 32}) => _take(_netMotion, max);
-  List<EegSample> takeUiEeg({int max = 8}) => _take(_uiEeg, max);
+  List<EegSample> takeUiEeg({int max = 64}) => _take(_uiEeg, max);
 
   void clear() {
     _csvEeg.clear();

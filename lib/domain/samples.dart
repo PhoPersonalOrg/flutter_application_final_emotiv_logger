@@ -31,6 +31,7 @@ class EegSample {
     required this.values,
     required this.receiveMonoUs,
     required this.wallClock,
+    this.contactQuality = 0,
   });
 
   static const channelNames = [
@@ -52,10 +53,22 @@ class EegSample {
 
   static const int channelCount = 14;
   static const double nominalRateHz = 128.0;
+  static const String qualityStreamName = 'Epoc X eQuality';
+  static const String qualityStreamType = 'Raw';
+
+  static List<String> get qualityChannelNames =>
+      channelNames.map((n) => 'q$n').toList(growable: false);
 
   final List<double> values;
   final int receiveMonoUs;
   final DateTime wallClock;
+
+  /// Mode-7 broadcast contact quality (`0..127`), or `0` when unknown.
+  final int contactQuality;
+
+  /// 14-channel broadcast CQ vector matching `emotiv-lsl` / `emotiv-lsl-cpp`.
+  List<double> qualityBroadcastValues() =>
+      List<double>.filled(channelCount, contactQuality.toDouble());
 }
 
 /// Parsed 10-channel motion sample: orientation quaternion, accelerometer (g)

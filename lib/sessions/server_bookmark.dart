@@ -52,7 +52,7 @@ class ServerBookmark {
   final String domain;
   final bool rememberPassword;
 
-  /// When true (SMB + remembered password), push CSVs during recording.
+  /// When true (SFTP/SMB + remembered password), push CSVs during recording.
   final bool liveSync;
 
   ServerBookmark copyWith({

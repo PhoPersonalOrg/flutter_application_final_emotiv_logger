@@ -12,4 +12,8 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 
-exec fvm flutter run --release --dart-define-from-file=.env "$@"
+BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+exec fvm flutter run --release \
+  --dart-define-from-file=.env \
+  --dart-define="BUILD_TIME=$BUILD_TIME" \
+  "$@"

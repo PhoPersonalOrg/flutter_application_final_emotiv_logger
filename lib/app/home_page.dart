@@ -1,9 +1,16 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../domain/acquisition_health.dart';
 import '../domain/acquisition_state.dart';
+import '../plot/contact_quality_head_map.dart';
+import '../plot/contact_quality_history_strip.dart';
+import '../plot/contact_quality_tier.dart';
+import '../plot/eeg_stacked_lane_plot.dart';
+import '../plot/live_eeg_ring_buffer.dart';
 import 'providers.dart';
 import 'settings_page.dart';
 
@@ -39,17 +46,23 @@ class _HomePageState extends ConsumerState<HomePage>
   }
 
   Future<void> _ensurePermissions() async {
-    await [
+    final permissions = <Permission>[
       Permission.bluetooth,
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
       Permission.locationWhenInUse,
-    ].request();
+    ];
+    // Android 13+ needs POST_NOTIFICATIONS for the streaming FGS notification.
+    if (Platform.isAndroid) {
+      permissions.add(Permission.notification);
+    }
+    await permissions.request();
   }
 
   @override
   Widget build(BuildContext context) {
     final asyncState = ref.watch(acquisitionStateProvider);
+    final buildInfoAsync = ref.watch(buildInfoProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -65,10 +78,31 @@ class _HomePageState extends ConsumerState<HomePage>
           ),
         ],
       ),
-      body: asyncState.when(
-        data: (state) => _Body(state: state),
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('State error: $e')),
+      body: Column(
+        children: [
+          Expanded(
+            child: asyncState.when(
+              data: (state) => _Body(state: state),
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) => Center(child: Text('State error: $e')),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+            child: Text(
+              buildInfoAsync.when(
+                data: (info) => info.label,
+                loading: () => '',
+                error: (_, __) => '',
+              ),
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 11,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -82,7 +116,7 @@ class _Body extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final health = state.health;
-    final activityAsync = ref.watch(uiEegActivityProvider);
+    final plotAsync = ref.watch(liveEegPlotSnapshotProvider);
     final sessionActive = state is AcquisitionStreaming ||
         state is AcquisitionPreparing ||
         state is AcquisitionConnecting ||
@@ -134,29 +168,9 @@ class _Body extends ConsumerWidget {
           ),
           const SizedBox(height: 12),
         ],
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.all(12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  'Activity',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 8),
-                activityAsync.when(
-                  data: (lastSampleAt) => _ActivityPanel(
-                    receiving: sessionActive,
-                    lastSampleAt: lastSampleAt,
-                  ),
-                  loading: () => _ActivityPanel(receiving: sessionActive),
-                  error: (error, stack) =>
-                      _ActivityPanel(receiving: sessionActive),
-                ),
-              ],
-            ),
-          ),
+        _SignalPreviewCard(
+          sessionActive: sessionActive,
+          snapshot: plotAsync.value ?? LiveEegPlotSnapshot.empty,
         ),
       ],
     );
@@ -393,40 +407,119 @@ class _Controls extends ConsumerWidget {
   }
 }
 
-class _ActivityPanel extends StatelessWidget {
-  const _ActivityPanel({
-    required this.receiving,
-    this.lastSampleAt,
+class _SignalPreviewCard extends StatelessWidget {
+  const _SignalPreviewCard({
+    required this.sessionActive,
+    required this.snapshot,
   });
 
-  final bool receiving;
-  final DateTime? lastSampleAt;
+  final bool sessionActive;
+  final LiveEegPlotSnapshot snapshot;
 
   @override
   Widget build(BuildContext context) {
-    final hasSample = lastSampleAt != null;
-    final active = receiving && hasSample;
+    final cq = snapshot.latestContactQuality;
+    final tier = snapshot.latestTier;
+    final hasCq = snapshot.hasSamples && cq > 0;
 
-    return Row(
-      children: [
-        if (active)
-          const SizedBox(
-            width: 20,
-            height: 20,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          )
-        else
-          Icon(
-            Icons.radio_button_unchecked,
-            size: 20,
-            color: Colors.grey.shade600,
-          ),
-        const SizedBox(width: 12),
-        Text(
-          active ? 'Receiving' : 'Idle',
-          style: Theme.of(context).textTheme.bodyLarge,
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Signal preview',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+                _CqReadoutChip(
+                  cq: cq,
+                  tier: tier,
+                  active: sessionActive && snapshot.hasSamples,
+                  hasCq: hasCq,
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (!sessionActive && !snapshot.hasSamples)
+              Row(
+                children: [
+                  Icon(
+                    Icons.radio_button_unchecked,
+                    size: 18,
+                    color: Colors.grey.shade600,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Idle — connect headset for live 14-ch EEG and contact quality',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ),
+                ],
+              )
+            else ...[
+              EegStackedLanePlot(
+                snapshot: snapshot,
+                streaming: sessionActive,
+                height: 184,
+              ),
+              const SizedBox(height: 8),
+              ContactQualityHistoryStrip(
+                cqHistoryTiers: snapshot.cqHistoryTiers,
+                height: 40,
+              ),
+              const SizedBox(height: 10),
+              ContactQualityHeadMap(
+                contactQuality: cq,
+                height: 128,
+              ),
+            ],
+          ],
         ),
-      ],
+      ),
+    );
+  }
+}
+
+class _CqReadoutChip extends StatelessWidget {
+  const _CqReadoutChip({
+    required this.cq,
+    required this.tier,
+    required this.active,
+    required this.hasCq,
+  });
+
+  final int cq;
+  final ContactQualityTier tier;
+  final bool active;
+  final bool hasCq;
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = active ? tier.color : Colors.grey.shade300;
+    final fg = active ? tier.labelColor : Colors.black87;
+    final text = active
+        ? (hasCq ? 'CQ $cq · ${tier.label}' : 'CQ 0 · ${tier.label}')
+        : 'CQ —';
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        text,
+        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+              color: fg,
+              fontWeight: FontWeight.w700,
+            ),
+      ),
     );
   }
 }
