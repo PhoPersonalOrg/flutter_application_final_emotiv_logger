@@ -230,6 +230,38 @@ class DropboxSync {
     }
     return s.isEmpty ? defaultRemoteRoot : s;
   }
+
+  /// Basename → size for files already under [remoteSession] (App Folder path).
+  static Future<Map<String, int>> _remoteFileSizes(String remoteSession) async {
+    try {
+      final listed = await Dropbox.listFolder(remoteSession);
+      final out = <String, int>{};
+      if (listed is! List) return out;
+      for (final item in listed) {
+        if (item is! Map) continue;
+        final filesize = item['filesize'] ?? item['size'];
+        if (filesize is! num) continue;
+        final name = _dropboxEntryName(item);
+        if (name == null || name.isEmpty) continue;
+        out[name] = filesize.toInt();
+      }
+      return out;
+    } catch (_) {
+      // Folder missing or list failed — treat as empty (upload everything).
+      return const {};
+    }
+  }
+
+  static String? _dropboxEntryName(Map<dynamic, dynamic> item) {
+    final name = item['name'];
+    if (name is String && name.isNotEmpty) return name;
+    final pathLower =
+        item['pathLower'] ?? item['path_lower'] ?? item['pathDisplay'];
+    if (pathLower is! String || pathLower.isEmpty) return null;
+    final trimmed = pathLower.replaceAll('\\', '/');
+    final slash = trimmed.lastIndexOf('/');
+    return slash >= 0 ? trimmed.substring(slash + 1) : trimmed;
+  }
 }
 
 class _DropboxBatchAdapter implements BatchRemoteAdapter {
@@ -254,6 +286,15 @@ class _DropboxBatchAdapter implements BatchRemoteAdapter {
       await ensureReady();
       _ready = true;
     }
+  }
+
+  @override
+  Future<Map<String, int>> remoteFileSizes(String folderName) async {
+    if (!_ready) {
+      await ensureReady();
+      _ready = true;
+    }
+    return DropboxSync._remoteFileSizes(_remoteSessionPath(folderName));
   }
 
   @override

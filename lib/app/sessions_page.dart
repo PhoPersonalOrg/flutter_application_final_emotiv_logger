@@ -72,6 +72,11 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
             ),
           ] else ...[
             IconButton(
+              tooltip: 'Sync All',
+              onPressed: _syncAll,
+              icon: const Icon(Icons.sync),
+            ),
+            IconButton(
               tooltip: 'Select',
               onPressed: () => setState(() => _selectMode = true),
               icon: const Icon(Icons.checklist),
@@ -268,6 +273,161 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
     await ref.read(sessionListProvider.notifier).refresh();
   }
 
+  /// Upload every finished session to every ready destination (Dropbox + bookmarks
+  /// with a remembered password). Bookmarks without a password are reported skipped.
+  Future<void> _syncAll() async {
+    final sessions = ref.read(sessionListProvider).value ?? const [];
+    final paths =
+        sessions.where((s) => !s.isActive).map((s) => s.path).toList();
+    if (paths.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No finished sessions to sync')),
+      );
+      return;
+    }
+
+    final bookmarkState = await ref.read(bookmarkStoreProvider.future);
+    final dropboxLinked = await ref.read(dropboxSyncProvider).isLinked();
+    if (!mounted) return;
+
+    final readyBookmarks = <({ServerBookmark bookmark, String password})>[];
+    final skippedNoPassword = <String>[];
+    for (final b in bookmarkState.bookmarks) {
+      final password =
+          await ref.read(bookmarkStoreProvider.notifier).readPassword(b.id);
+      if (password != null && password.isNotEmpty) {
+        readyBookmarks.add((bookmark: b, password: password));
+      } else {
+        skippedNoPassword.add(b.name);
+      }
+    }
+
+    if (!dropboxLinked && readyBookmarks.isEmpty) {
+      await _promptNoDestinations();
+      return;
+    }
+
+    final destinationLines = <String>[
+      if (dropboxLinked) 'Dropbox (App Folder)',
+      for (final e in readyBookmarks)
+        '${e.bookmark.name} (${e.bookmark.protocol.label})',
+    ];
+    final skippedLines = [
+      for (final name in skippedNoPassword) '$name (no password)',
+    ];
+
+    if (!mounted) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Sync All'),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Upload ${paths.length} session'
+                '${paths.length == 1 ? '' : 's'} to:',
+              ),
+              const SizedBox(height: 8),
+              for (final line in destinationLines) Text('• $line'),
+              if (skippedLines.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                const Text('Skipped destinations:'),
+                for (final line in skippedLines) Text('• $line'),
+              ],
+              const SizedBox(height: 12),
+              const Text(
+                'Identical files already on Dropbox/SMB are skipped. '
+                'Transfers run in the background.',
+                style: TextStyle(fontSize: 12, color: Colors.black54),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Sync All'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final notifier = ref.read(backgroundTransferProvider.notifier);
+    if (dropboxLinked) {
+      final remoteRoot = ref.read(settingsProvider).dropboxRemoteRoot;
+      notifier.enqueueDropbox(sessionPaths: paths, remoteRoot: remoteRoot);
+    }
+    for (final entry in readyBookmarks) {
+      notifier.enqueueBookmark(
+        bookmark: entry.bookmark,
+        password: entry.password,
+        sessionPaths: paths,
+      );
+    }
+
+    final queued = [
+      if (dropboxLinked) 'Dropbox',
+      ...readyBookmarks.map((e) => e.bookmark.name),
+    ];
+    final skipNote = skippedNoPassword.isEmpty
+        ? ''
+        : '; skipped ${skippedNoPassword.join(', ')} (no password)';
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Queued sync of ${paths.length} session'
+          '${paths.length == 1 ? '' : 's'} to ${queued.join(', ')}$skipNote',
+        ),
+      ),
+    );
+  }
+
+  Future<void> _promptNoDestinations() async {
+    final action = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('No transfer destinations'),
+        content: const Text(
+          'Connect Dropbox in Settings or add an SFTP/SMB bookmark.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, 'settings'),
+            child: const Text('Settings'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, 'bookmark'),
+            child: const Text('Add bookmark'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (action == 'bookmark') {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const BookmarksPage()),
+      );
+    } else if (action == 'settings') {
+      await Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
+      );
+    }
+  }
+
   Future<void> _transferSelected() async {
     final paths = _selected.toList();
     if (paths.isEmpty) return;
@@ -278,39 +438,7 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
 
     final hasBookmarks = bookmarkState.bookmarks.isNotEmpty;
     if (!hasBookmarks && !dropboxLinked) {
-      final action = await showDialog<String>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('No transfer destinations'),
-          content: const Text(
-            'Connect Dropbox in Settings or add an SFTP/SMB bookmark.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, 'settings'),
-              child: const Text('Settings'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(ctx, 'bookmark'),
-              child: const Text('Add bookmark'),
-            ),
-          ],
-        ),
-      );
-      if (!mounted) return;
-      if (action == 'bookmark') {
-        await Navigator.of(context).push(
-          MaterialPageRoute<void>(builder: (_) => const BookmarksPage()),
-        );
-      } else if (action == 'settings') {
-        await Navigator.of(context).push(
-          MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
-        );
-      }
+      await _promptNoDestinations();
       return;
     }
 
@@ -390,7 +518,9 @@ class _BackgroundTransferBanner extends ConsumerWidget {
               ? 'Error on ${p.fileName.isEmpty ? p.sessionFolder : "${p.sessionFolder}/${p.fileName}"} — continuing…'
               : (p.fileName.isEmpty
                   ? '${p.sessionFolder} · finishing…'
-                  : '${p.sessionFolder}/${p.fileName} (${p.fileIndex}/${p.fileCount})'));
+                  : p.skipped
+                      ? '${p.sessionFolder}/${p.fileName} skipped (${p.fileIndex}/${p.fileCount})'
+                      : '${p.sessionFolder}/${p.fileName} (${p.fileIndex}/${p.fileCount})'));
 
       return Card(
         margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),

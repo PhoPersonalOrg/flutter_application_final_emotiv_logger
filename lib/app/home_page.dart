@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -44,17 +46,23 @@ class _HomePageState extends ConsumerState<HomePage>
   }
 
   Future<void> _ensurePermissions() async {
-    await [
+    final permissions = <Permission>[
       Permission.bluetooth,
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
       Permission.locationWhenInUse,
-    ].request();
+    ];
+    // Android 13+ needs POST_NOTIFICATIONS for the streaming FGS notification.
+    if (Platform.isAndroid) {
+      permissions.add(Permission.notification);
+    }
+    await permissions.request();
   }
 
   @override
   Widget build(BuildContext context) {
     final asyncState = ref.watch(acquisitionStateProvider);
+    final buildInfoAsync = ref.watch(buildInfoProvider);
 
     return Scaffold(
       appBar: AppBar(
@@ -70,10 +78,31 @@ class _HomePageState extends ConsumerState<HomePage>
           ),
         ],
       ),
-      body: asyncState.when(
-        data: (state) => _Body(state: state),
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('State error: $e')),
+      body: Column(
+        children: [
+          Expanded(
+            child: asyncState.when(
+              data: (state) => _Body(state: state),
+              loading: () => const Center(child: CircularProgressIndicator()),
+              error: (e, _) => Center(child: Text('State error: $e')),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+            child: Text(
+              buildInfoAsync.when(
+                data: (info) => info.label,
+                loading: () => '',
+                error: (_, __) => '',
+              ),
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 11,
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

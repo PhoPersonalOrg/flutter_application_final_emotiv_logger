@@ -10,7 +10,10 @@ import '../sessions/bookmark_store.dart';
 import '../sessions/dropbox_sync.dart';
 import '../sessions/server_bookmark.dart';
 import '../sessions/session_library.dart';
+import 'build_info.dart';
 import 'settings.dart';
+
+final buildInfoProvider = FutureProvider<BuildInfo>((ref) => loadBuildInfo());
 
 final settingsRepositoryProvider = Provider<AppSettingsRepository>((ref) {
   return AppSettingsRepository();

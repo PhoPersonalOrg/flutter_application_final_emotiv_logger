@@ -18,6 +18,7 @@ class TransferProgress {
     required this.bytesSent,
     required this.bytesTotal,
     this.done = false,
+    this.skipped = false,
     this.error,
   });
 
@@ -28,6 +29,8 @@ class TransferProgress {
   final int bytesSent;
   final int bytesTotal;
   final bool done;
+  /// True when the remote file already matched local size and was not uploaded.
+  final bool skipped;
   final String? error;
 
   double get fraction {
@@ -37,6 +40,13 @@ class TransferProgress {
 }
 
 typedef TransferProgressCallback = void Function(TransferProgress progress);
+
+/// Skip upload when a remote file exists with the same byte size as local.
+bool shouldSkipIdenticalRemoteFile({
+  required int localBytes,
+  required int? remoteBytes,
+}) =>
+    remoteBytes != null && remoteBytes == localBytes;
 
 /// Records a single session- or file-level error during a batch transfer.
 class TransferItemFailure {
@@ -100,6 +110,12 @@ class BatchTransferReport {
 /// delete or modify local files.
 abstract class BatchRemoteAdapter {
   Future<void> ensureSessionDir(String folderName);
+
+  /// Basename → size for files already under the remote session folder.
+  /// Empty map means "upload everything" (listing unsupported or failed).
+  Future<Map<String, int>> remoteFileSizes(String folderName) async {
+    return const <String, int>{};
+  }
 
   Future<void> uploadFile({
     required File localFile,
@@ -255,6 +271,13 @@ class SessionTransfer {
           continue;
         }
 
+        Map<String, int> remoteSizes = const {};
+        try {
+          remoteSizes = await adapter.remoteFileSizes(folderName);
+        } catch (_) {
+          remoteSizes = const {};
+        }
+
         var sessionFailed = false;
         var fileIndex = 0;
         for (final file in files) {
@@ -267,6 +290,24 @@ class SessionTransfer {
 
           try {
             final length = await file.length();
+            if (shouldSkipIdenticalRemoteFile(
+              localBytes: length,
+              remoteBytes: remoteSizes[name],
+            )) {
+              onProgress?.call(
+                TransferProgress(
+                  sessionFolder: folderName,
+                  fileName: name,
+                  fileIndex: fileIndex,
+                  fileCount: files.length,
+                  bytesSent: length,
+                  bytesTotal: length,
+                  skipped: true,
+                ),
+              );
+              continue;
+            }
+
             onProgress?.call(
               TransferProgress(
                 sessionFolder: folderName,
@@ -452,6 +493,25 @@ class SessionTransfer {
     return out;
   }
 
+  /// Maps basename → size for files already under [remoteSession].
+  static Future<Map<String, int>> _smbRemoteFileSizes(
+    Smb2Pool pool,
+    String remoteSession,
+  ) async {
+    try {
+      final entries = await pool.listDirectory(remoteSession);
+      final out = <String, int>{};
+      for (final entry in entries) {
+        if (entry.isFile) {
+          out[entry.name] = entry.size;
+        }
+      }
+      return out;
+    } catch (_) {
+      return const {};
+    }
+  }
+
   static bool _isCancelled(bool Function()? isCancelled) =>
       isCancelled != null && isCancelled();
 
@@ -504,6 +564,12 @@ class _SftpBatchAdapter implements BatchRemoteAdapter {
   Future<void> ensureSessionDir(String folderName) async {
     final sftp = await _ensureConnected();
     await SessionTransfer._sftpEnsureDir(sftp, _remoteSessionPath(folderName));
+  }
+
+  @override
+  Future<Map<String, int>> remoteFileSizes(String folderName) async {
+    // SFTP skip-by-size is not implemented yet (matches prior behavior).
+    return const <String, int>{};
   }
 
   @override
@@ -591,6 +657,15 @@ class _SmbBatchAdapter implements BatchRemoteAdapter {
   Future<void> ensureSessionDir(String folderName) async {
     final pool = await _ensureConnected();
     await pool.mkdir(_remoteSessionPath(folderName), recursive: true);
+  }
+
+  @override
+  Future<Map<String, int>> remoteFileSizes(String folderName) async {
+    final pool = await _ensureConnected();
+    return SessionTransfer._smbRemoteFileSizes(
+      pool,
+      _remoteSessionPath(folderName),
+    );
   }
 
   @override
