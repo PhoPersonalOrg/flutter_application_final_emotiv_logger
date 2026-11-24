@@ -2,18 +2,32 @@ import 'dart:io';
 
 import 'package:dropbox_client/dropbox_client.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:path/path.dart' as p;
 
 import 'dropbox_config.dart';
 import 'session_transfer.dart';
 
+typedef DropboxRawUploadFn = Future<void> Function(
+  String localFilePath,
+  String remotePath,
+  void Function(int bytesSent, int bytesTotal) onProgress,
+);
+
 /// Dropbox App Folder auth + session upload (PKCE, no app secret).
+///
+/// Local session files are strictly read-only and always kept on device.
 class DropboxSync {
-  DropboxSync({FlutterSecureStorage? secureStorage})
-      : _secure = secureStorage ??
-            const FlutterSecureStorage(aOptions: AndroidOptions());
+  DropboxSync({
+    FlutterSecureStorage? secureStorage,
+    DropboxRawUploadFn? rawUpload,
+    Future<void> Function()? ensureReadyOverride,
+  })  : _secure = secureStorage ??
+            const FlutterSecureStorage(aOptions: AndroidOptions()),
+        _rawUpload = rawUpload,
+        _ensureReadyOverride = ensureReadyOverride;
 
   final FlutterSecureStorage _secure;
+  final DropboxRawUploadFn? _rawUpload;
+  final Future<void> Function()? _ensureReadyOverride;
 
   static const _credentialsKey = 'acq.v1.dropbox.pkceCredentials';
   static const defaultRemoteRoot = 'EmotivSessions';
@@ -116,99 +130,66 @@ class DropboxSync {
     await connect();
   }
 
-  /// Uploads one local `session_*` directory under the App Folder.
-  Future<void> uploadSession(
+  /// Ensures existing stored credentials are active without opening interactive
+  /// browser PKCE flows during background uploads.
+  Future<void> _ensureBackgroundReady() async {
+    if (_ensureReadyOverride != null) {
+      await _ensureReadyOverride();
+      return;
+    }
+    _requireConfigured();
+    await initIfConfigured();
+    if (!await isLinked()) {
+      throw StateError('Dropbox not linked (connect Dropbox in Settings)');
+    }
+  }
+
+  /// Uploads one local `session_*` directory under the App Folder, continuing
+  /// across remaining files if an error occurs and keeping local files intact.
+  Future<BatchTransferReport> uploadSession(
     String localSessionDir, {
     String remoteRoot = defaultRemoteRoot,
     TransferProgressCallback? onProgress,
     bool Function()? isCancelled,
-  }) async {
-    await ensureAuthorized();
-    final dir = Directory(localSessionDir);
-    if (!await dir.exists()) {
-      throw StateError('Session folder missing: $localSessionDir');
-    }
-
-    final folderName = p.basename(localSessionDir);
-    final root = _normalizeRemoteRoot(remoteRoot);
-    final remoteSession =
-        root.isEmpty ? '/$folderName' : '/$root/$folderName';
-
-    final files = <File>[];
-    await for (final entity in dir.list(followLinks: false)) {
-      if (entity is File) files.add(entity);
-    }
-    files.sort((a, b) => p.basename(a.path).compareTo(p.basename(b.path)));
-    if (files.isEmpty) {
-      throw StateError('Session folder is empty: $localSessionDir');
-    }
-
-    var fileIndex = 0;
-    for (final file in files) {
-      if (isCancelled != null && isCancelled()) {
-        throw const TransferCancelled();
-      }
-      fileIndex++;
-      final name = p.basename(file.path);
-      final remoteFile = '$remoteSession/$name';
-      final length = await file.length();
-
-      onProgress?.call(
-        TransferProgress(
-          sessionFolder: folderName,
-          fileName: name,
-          fileIndex: fileIndex,
-          fileCount: files.length,
-          bytesSent: 0,
-          bytesTotal: length,
-        ),
-      );
-
-      await Dropbox.upload(file.path, remoteFile, (uploaded, total) {
-        onProgress?.call(
-          TransferProgress(
-            sessionFolder: folderName,
-            fileName: name,
-            fileIndex: fileIndex,
-            fileCount: files.length,
-            bytesSent: uploaded,
-            bytesTotal: total > 0 ? total : length,
-          ),
-        );
-      });
-    }
-
-    onProgress?.call(
-      TransferProgress(
-        sessionFolder: folderName,
-        fileName: '',
-        fileIndex: files.length,
-        fileCount: files.length,
-        bytesSent: 1,
-        bytesTotal: 1,
-        done: true,
-      ),
+  }) {
+    return uploadSessions(
+      [localSessionDir],
+      remoteRoot: remoteRoot,
+      onProgress: onProgress,
+      isCancelled: isCancelled,
     );
   }
 
-  /// Uploads several sessions sequentially.
-  Future<void> uploadSessions(
+  /// Uploads several sessions sequentially in the background, continuing across
+  /// remaining files and sessions when errors occur and never deleting local files.
+  Future<BatchTransferReport> uploadSessions(
     List<String> sessionPaths, {
     String remoteRoot = defaultRemoteRoot,
     TransferProgressCallback? onProgress,
     bool Function()? isCancelled,
   }) async {
-    for (final path in sessionPaths) {
-      if (isCancelled != null && isCancelled()) {
-        throw const TransferCancelled();
-      }
-      await uploadSession(
-        path,
-        remoteRoot: remoteRoot,
-        onProgress: onProgress,
-        isCancelled: isCancelled,
-      );
-    }
+    final adapter = _DropboxBatchAdapter(
+      ensureReady: _ensureBackgroundReady,
+      remoteRoot: _normalizeRemoteRoot(remoteRoot),
+      rawUpload: _rawUpload ?? _defaultDropboxUpload,
+    );
+    final report = await SessionTransfer.runResilientBatch(
+      destinationLabel: 'Dropbox',
+      sessionPaths: sessionPaths,
+      adapter: adapter,
+      onProgress: onProgress,
+      isCancelled: isCancelled,
+    );
+    lastError = report.hasFailures ? report.failures.first.label : null;
+    return report;
+  }
+
+  static Future<void> _defaultDropboxUpload(
+    String localPath,
+    String remotePath,
+    void Function(int bytesSent, int bytesTotal) onProgress,
+  ) async {
+    await Dropbox.upload(localPath, remotePath, onProgress);
   }
 
   /// Best-effort post-stop upload; never throws to callers.
@@ -220,22 +201,19 @@ class DropboxSync {
     if (!enabled || sessionPath == null || sessionPath.isEmpty) {
       return false;
     }
-    if (!isSupported) {
-      lastError = 'Dropbox not supported on this platform';
-      return false;
-    }
-    if (!DropboxConfig.isConfigured) {
-      lastError = 'Dropbox not configured (missing DROPBOX_APP_KEY)';
-      return false;
-    }
-    try {
-      if (!await isLinked()) {
-        lastError = 'Dropbox not linked';
+    if (_ensureReadyOverride == null) {
+      if (!isSupported) {
+        lastError = 'Dropbox not supported on this platform';
         return false;
       }
-      await uploadSession(sessionPath, remoteRoot: remoteRoot);
-      lastError = null;
-      return true;
+      if (!DropboxConfig.isConfigured) {
+        lastError = 'Dropbox not configured (missing DROPBOX_APP_KEY)';
+        return false;
+      }
+    }
+    try {
+      final report = await uploadSession(sessionPath, remoteRoot: remoteRoot);
+      return report.isFullSuccess;
     } catch (e) {
       lastError = '$e';
       return false;
@@ -252,4 +230,62 @@ class DropboxSync {
     }
     return s.isEmpty ? defaultRemoteRoot : s;
   }
+}
+
+class _DropboxBatchAdapter implements BatchRemoteAdapter {
+  _DropboxBatchAdapter({
+    required this.ensureReady,
+    required this.remoteRoot,
+    required this.rawUpload,
+  });
+
+  final Future<void> Function() ensureReady;
+  final String remoteRoot;
+  final DropboxRawUploadFn rawUpload;
+
+  bool _ready = false;
+
+  String _remoteSessionPath(String folderName) =>
+      remoteRoot.isEmpty ? '/$folderName' : '/$remoteRoot/$folderName';
+
+  @override
+  Future<void> ensureSessionDir(String folderName) async {
+    if (!_ready) {
+      await ensureReady();
+      _ready = true;
+    }
+  }
+
+  @override
+  Future<void> uploadFile({
+    required File localFile,
+    required String folderName,
+    required String fileName,
+    required int length,
+    required void Function(int bytesSent, int bytesTotal) onFileProgress,
+    bool Function()? isCancelled,
+  }) async {
+    if (isCancelled != null && isCancelled()) {
+      throw const TransferCancelled();
+    }
+    if (!_ready) {
+      await ensureReady();
+      _ready = true;
+    }
+    final remoteFile = '${_remoteSessionPath(folderName)}/$fileName';
+    await rawUpload(localFile.path, remoteFile, (uploaded, total) {
+      if (isCancelled != null && isCancelled()) {
+        throw const TransferCancelled();
+      }
+      onFileProgress(uploaded, total);
+    });
+  }
+
+  @override
+  Future<void> resetConnection() async {
+    _ready = false;
+  }
+
+  @override
+  Future<void> close() async {}
 }

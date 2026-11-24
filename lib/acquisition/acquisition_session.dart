@@ -39,7 +39,7 @@ class AcquisitionSession {
     _hub = SampleHub(onHealth: _mutateHealth);
     _csv = CsvSink(hub: _hub);
     _lsl = LslSink(hub: _hub, onHealth: _mutateHealth);
-    _network = NetworkSink(hub: _hub, onHealth: _mutateHealth);
+    _network = NetworkSink(hub: _hub, onHealth: _mutateAndPublishHealth);
     _liveSync = liveSync ??
         LiveSessionSync(
           dropbox: dropboxSync ?? DropboxSync(),
@@ -114,14 +114,31 @@ class AcquisitionSession {
   int get scanSubscriptionCountForTest => _scanSubs.length;
 
   Future<void> updateSettings(AppSettings settings) async {
+    final prev = _settings;
     _settings = settings;
     _preferredId = settings.preferredDeviceId ?? _preferredId;
     _preferredName = settings.preferredDeviceName ?? _preferredName;
     if (_state is AcquisitionStreaming || _state is AcquisitionPreparing) {
-      await _network.configure(
-        settings: settings,
-        deviceId: _identity?.btKeyHex,
+      unawaited(
+        _network.configure(
+          settings: settings,
+          deviceId: _identity?.btKeyHex,
+        ),
       );
+      if (_state is AcquisitionStreaming &&
+          _device != null &&
+          (prev.lslEnabled != settings.lslEnabled ||
+              prev.hostname.trim() != settings.hostname.trim())) {
+        unawaited(
+          _lsl
+              .start(
+                enabled: settings.lslEnabled,
+                sourceId: _device!.remoteId.str,
+                hostname: settings.hostname,
+              )
+              .then((_) => _refreshStreamingHealth()),
+        );
+      }
     }
   }
 
@@ -370,7 +387,6 @@ class AcquisitionSession {
       // CSV is first-class but must never abort BLE arming.
       var sessionPath = '';
       try {
-        await _liveSync.stop(timeout: const Duration(seconds: 5));
         final csvStart = await _csv.startSession(
           saveDirectory: _settings.saveDirectory,
           identity: _identity!,
@@ -382,13 +398,6 @@ class AcquisitionSession {
             csvSessionPath: csvStart.sessionPath,
             csvMessage: csvStart.message,
             csvUsingFallback: csvStart.usedFallback,
-          ),
-        );
-        unawaited(
-          _liveSync.start(
-            sessionPath: sessionPath,
-            settings: _settings,
-            flushCsv: _csv.flush,
           ),
         );
       } catch (e) {
@@ -403,10 +412,7 @@ class AcquisitionSession {
       await _lsl.start(
         enabled: _settings.lslEnabled,
         sourceId: device.remoteId.str,
-      );
-      await _network.configure(
-        settings: _settings,
-        deviceId: _identity!.btKeyHex,
+        hostname: _settings.hostname,
       );
       if (!_isEpochCurrent(epoch)) return;
 
@@ -434,6 +440,24 @@ class AcquisitionSession {
           health: _health,
         ),
       );
+
+      // Network streaming and remote session sync are best-effort and must
+      // never gate BLE/CSV startup.
+      unawaited(
+        _network.configure(
+          settings: _settings,
+          deviceId: _identity!.btKeyHex,
+        ),
+      );
+      if (sessionPath.isNotEmpty) {
+        unawaited(
+          _liveSync.start(
+            sessionPath: sessionPath,
+            settings: _settings,
+            flushCsv: _csv.flush,
+          ),
+        );
+      }
     } catch (e) {
       if (!_isEpochCurrent(epoch)) return;
       await _orderedTeardown(disconnectBle: true);
@@ -1081,13 +1105,8 @@ class AcquisitionSession {
     try {
       await _csv.stop();
     } catch (_) {}
-    try {
-      await _liveSync.stop(
-        timeout: disconnectBle
-            ? const Duration(seconds: 45)
-            : const Duration(seconds: 15),
-      );
-    } catch (_) {}
+    // Detach remote finalization so BLE disconnect/reconnect never blocks.
+    unawaited(_liveSync.stop(timeout: const Duration(seconds: 60)));
     try {
       await _lsl.stop();
     } catch (_) {}
@@ -1124,6 +1143,17 @@ class AcquisitionSession {
       _emit(AcquisitionIdle(health: _health));
     } else if (s is AcquisitionStopping) {
       _emit(AcquisitionStopping(deviceName: s.deviceName, health: _health));
+    } else if (s is AcquisitionScanning) {
+      _emit(s.copyWith(health: _health));
+    } else if (s is AcquisitionReconnecting) {
+      _emit(
+        AcquisitionReconnecting(
+          deviceName: s.deviceName,
+          attempt: s.attempt,
+          nextRetryIn: s.nextRetryIn,
+          health: _health,
+        ),
+      );
     }
   }
 
@@ -1131,6 +1161,13 @@ class AcquisitionSession {
     AcquisitionHealth Function(AcquisitionHealth) fn,
   ) {
     _health = fn(_health);
+  }
+
+  void _mutateAndPublishHealth(
+    AcquisitionHealth Function(AcquisitionHealth) fn,
+  ) {
+    _mutateHealth(fn);
+    _refreshStreamingHealth();
   }
 
   void _emit(AcquisitionState next) {

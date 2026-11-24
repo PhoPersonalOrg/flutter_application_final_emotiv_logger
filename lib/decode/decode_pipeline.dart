@@ -133,6 +133,7 @@ class DecodePipeline {
                     values: frame.values,
                     receiveMonoUs: message.receiveMonoUs,
                     wallClock: wall,
+                    contactQuality: frame.contactQuality ?? 0,
                   ),
                 ),
               );

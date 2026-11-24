@@ -204,7 +204,7 @@ class _BookmarkEditorPageState extends ConsumerState<BookmarkEditorPage> {
       smbShare: share,
       domain: _domain.text.trim(),
       rememberPassword: _rememberPassword,
-      liveSync: _protocol == TransferProtocol.smb && _liveSync,
+      liveSync: _rememberPassword && _liveSync,
     );
   }
 
@@ -480,18 +480,17 @@ class _BookmarkEditorPageState extends ConsumerState<BookmarkEditorPage> {
               value: _rememberPassword,
               onChanged: (v) => setState(() => _rememberPassword = v),
             ),
-            if (_protocol == TransferProtocol.smb)
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Live sync while recording'),
-                subtitle: const Text(
-                  'Requires remembered password; appends CSVs during capture',
-                ),
-                value: _liveSync,
-                onChanged: _rememberPassword
-                    ? (v) => setState(() => _liveSync = v)
-                    : null,
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Live sync while recording'),
+              subtitle: const Text(
+                'Requires remembered password; streams CSVs in background during capture',
               ),
+              value: _rememberPassword && _liveSync,
+              onChanged: _rememberPassword
+                  ? (v) => setState(() => _liveSync = v)
+                  : null,
+            ),
             if (_protocol == TransferProtocol.smb) ...[
               TextFormField(
                 controller: _smbShare,
