@@ -109,6 +109,7 @@ In-process outlets via `lsl_flutter` only:
 |--------|------|----------|------|
 | Epoc X | EEG | 14 | 128 Hz |
 | Epoc X Motion | Accelerometer | 10 (Q0–Q3, Acc XYZ, Mag XYZ) | 16 Hz |
+| Epoc X eQuality | Raw | 14 (broadcast Mode-7 CQ 0–127) | 128 Hz |
 
 If outlet creation fails (e.g. Android `liblsl.so`), LSL becomes **Degraded** and acquisition + CSV continue.
 

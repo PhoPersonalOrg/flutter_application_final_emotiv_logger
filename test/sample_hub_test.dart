@@ -46,4 +46,39 @@ void main() {
     expect(health.decodeFailures, 1);
     hub.dispose();
   });
+
+  test('EegSample eQuality metadata and broadcast CQ vector match LSL schema', () {
+    expect(EegSample.qualityStreamName, 'Epoc X eQuality');
+    expect(EegSample.qualityStreamType, 'Raw');
+    expect(EegSample.qualityChannelNames.length, 14);
+    expect(EegSample.qualityChannelNames.first, 'qAF3');
+    expect(EegSample.qualityChannelNames.last, 'qAF4');
+
+    final defaultSample = EegSample(
+      values: List<double>.filled(14, 1.5),
+      receiveMonoUs: 10,
+      wallClock: DateTime.fromMillisecondsSinceEpoch(10),
+    );
+    expect(defaultSample.qualityBroadcastValues(), List<double>.filled(14, 0.0));
+
+    var health = const AcquisitionHealth();
+    final hub = SampleHub(onHealth: (fn) => health = fn(health));
+    hub.publishDecode(
+      DecodeEegOk(
+        EegSample(
+          values: List<double>.filled(14, 2.5),
+          receiveMonoUs: 42,
+          wallClock: DateTime.fromMillisecondsSinceEpoch(42),
+          contactQuality: 0x2B,
+        ),
+      ),
+    );
+
+    final drained = hub.takeLslEeg();
+    expect(drained, hasLength(1));
+    final cqVec = drained.single.qualityBroadcastValues();
+    expect(cqVec, hasLength(EegSample.channelCount));
+    expect(cqVec, everyElement(43.0));
+    hub.dispose();
+  });
 }

@@ -39,7 +39,7 @@ class AcquisitionSession {
     _hub = SampleHub(onHealth: _mutateHealth);
     _csv = CsvSink(hub: _hub);
     _lsl = LslSink(hub: _hub, onHealth: _mutateHealth);
-    _network = NetworkSink(hub: _hub, onHealth: _mutateHealth);
+    _network = NetworkSink(hub: _hub, onHealth: _mutateAndPublishHealth);
     _liveSync = liveSync ??
         LiveSessionSync(
           dropbox: dropboxSync ?? DropboxSync(),
@@ -118,9 +118,11 @@ class AcquisitionSession {
     _preferredId = settings.preferredDeviceId ?? _preferredId;
     _preferredName = settings.preferredDeviceName ?? _preferredName;
     if (_state is AcquisitionStreaming || _state is AcquisitionPreparing) {
-      await _network.configure(
-        settings: settings,
-        deviceId: _identity?.btKeyHex,
+      unawaited(
+        _network.configure(
+          settings: settings,
+          deviceId: _identity?.btKeyHex,
+        ),
       );
     }
   }
@@ -404,10 +406,6 @@ class AcquisitionSession {
         enabled: _settings.lslEnabled,
         sourceId: device.remoteId.str,
       );
-      await _network.configure(
-        settings: _settings,
-        deviceId: _identity!.btKeyHex,
-      );
       if (!_isEpochCurrent(epoch)) return;
 
       _acceptPackets = true;
@@ -432,6 +430,15 @@ class AcquisitionSession {
               ? (_health.csvSessionPath ?? '(no csv)')
               : sessionPath,
           health: _health,
+        ),
+      );
+
+      // Network streaming is best-effort and must never gate BLE/CSV startup
+      // (especially when DNS lookup stalls or fails on iOS).
+      unawaited(
+        _network.configure(
+          settings: _settings,
+          deviceId: _identity!.btKeyHex,
         ),
       );
     } catch (e) {
@@ -1131,6 +1138,13 @@ class AcquisitionSession {
     AcquisitionHealth Function(AcquisitionHealth) fn,
   ) {
     _health = fn(_health);
+  }
+
+  void _mutateAndPublishHealth(
+    AcquisitionHealth Function(AcquisitionHealth) fn,
+  ) {
+    _mutateHealth(fn);
+    _refreshStreamingHealth();
   }
 
   void _emit(AcquisitionState next) {

@@ -19,11 +19,14 @@ class LslSink {
 
   OutletWorker? _worker;
   StreamInfo? _eegInfo;
+  StreamInfo? _qualityInfo;
   StreamInfo? _motionInfo;
   StreamSubscription? _sub;
   bool _active = false;
   int _eegOk = 0;
   int _eegFail = 0;
+  int _qualityOk = 0;
+  int _qualityFail = 0;
   int _motionOk = 0;
   int _motionFail = 0;
 
@@ -60,6 +63,25 @@ class LslSink {
       );
       if (!eegAdded) {
         throw StateError('Failed to add EEG LSL stream');
+      }
+
+      try {
+        _qualityInfo = StreamInfoFactory.createDoubleStreamInfo(
+          EegSample.qualityStreamName,
+          EegSample.qualityStreamType,
+          Float32ChannelFormat(),
+          channelCount: EegSample.channelCount,
+          nominalSRate: EegSample.nominalRateHz,
+          sourceId: sourceId,
+        );
+        final qualityAdded = await _worker!
+            .addStream(_qualityInfo!)
+            .timeout(const Duration(seconds: 5));
+        if (!qualityAdded) {
+          _qualityInfo = null;
+        }
+      } catch (_) {
+        _qualityInfo = null;
       }
 
       try {
@@ -100,11 +122,24 @@ class LslSink {
   Future<void> _drain() async {
     if (!_active || _worker == null) return;
     for (final s in hub.takeLslEeg()) {
+      var eegPushed = false;
       try {
         await _worker!.pushSample('Epoc X', s.values);
         _eegOk++;
+        eegPushed = true;
       } catch (_) {
         _eegFail++;
+      }
+      if (eegPushed && _qualityInfo != null) {
+        try {
+          await _worker!.pushSample(
+            EegSample.qualityStreamName,
+            s.qualityBroadcastValues(),
+          );
+          _qualityOk++;
+        } catch (_) {
+          _qualityFail++;
+        }
       }
     }
     if (_motionInfo != null) {
@@ -128,25 +163,36 @@ class LslSink {
       (h) => h.copyWith(
         lslStatus: LslSubsystemStatus.idle,
         lslMessage: 'LSL stopped (eeg ok=$_eegOk fail=$_eegFail '
+            'quality ok=$_qualityOk fail=$_qualityFail '
             'motion ok=$_motionOk fail=$_motionFail)',
       ),
     );
-    _eegOk = _eegFail = _motionOk = _motionFail = 0;
+    _eegOk = _eegFail = _qualityOk = _qualityFail = _motionOk = _motionFail = 0;
   }
 
   Future<void> _cleanupWorker() async {
     try {
       if (_worker != null) {
         if (_eegInfo != null) {
-          await _worker!.removeStream('Epoc X');
+          try {
+            await _worker!.removeStream('Epoc X');
+          } catch (_) {}
+        }
+        if (_qualityInfo != null) {
+          try {
+            await _worker!.removeStream(EegSample.qualityStreamName);
+          } catch (_) {}
         }
         if (_motionInfo != null) {
-          await _worker!.removeStream('Epoc X Motion');
+          try {
+            await _worker!.removeStream('Epoc X Motion');
+          } catch (_) {}
         }
       }
     } catch (_) {}
     _worker = null;
     _eegInfo = null;
+    _qualityInfo = null;
     _motionInfo = null;
   }
 }

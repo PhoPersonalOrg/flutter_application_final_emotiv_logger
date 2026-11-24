@@ -126,6 +126,7 @@ void main() {
     expect(result, isA<DecodeEegOk>());
     final sample = (result as DecodeEegOk).sample;
     expect(sample.contactQuality, 0x6B);
+    expect(sample.qualityBroadcastValues(), List<double>.filled(14, 107.0));
 
     await pipeline.dispose();
   });
