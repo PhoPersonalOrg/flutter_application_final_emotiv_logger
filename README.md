@@ -46,6 +46,16 @@ cd ../ACTIVE_DEV/emotiv-lsl
 
 That writes `eeg_offline.csv` / `motion_offline.csv` (classification by payload length) and can emit `.epocxwire` for `main.py --replay`.
 
+Cross-client EEG parity (Flutter session → wire → Python / optional C++ LSL) lives in sibling **emotiv-lsl**:
+
+```bash
+cd ../emotiv-lsl
+python -m tests.test_client_compat_flutter
+python -m tests.test_client_compat_inventory   # documents Flutter LSL divergences
+```
+
+In-app Mode-7 crypto gate: `flutter test test/crypto_codec_test.dart`.
+
 ## Sessions tab (transfer)
 
 Bottom nav **Sessions** lists prior `session_*` folders. Multi-select and transfer over **SFTP** (`dartssh2`), **SMB** (`dart_smb2`), or **Dropbox** (App Folder) to a remembered destination. Server bookmarks store host/user/path in SharedPreferences (optional password in secure storage). The live recording folder is not transferable/deletable while acquisition is open. SFTP over Tailscale is the usual path; SMB on LAN may need Local Network permission on iOS.
