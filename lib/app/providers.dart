@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../acquisition/acquisition_session.dart';
 import '../domain/acquisition_state.dart';
+import '../plot/live_eeg_ring_buffer.dart';
 import '../sessions/bookmark_store.dart';
 import '../sessions/dropbox_sync.dart';
 import '../sessions/server_bookmark.dart';
@@ -82,15 +83,81 @@ final acquisitionStateProvider = StreamProvider<AcquisitionState>((ref) {
   });
 });
 
-/// Emits when a fresh EEG sample reaches the UI queue (Record-tab activity).
-final uiEegActivityProvider = StreamProvider<DateTime>((ref) async* {
+/// Drains `SampleHub.takeUiEeg` into a preallocated [LiveEegRingBuffer] and
+/// emits downsampled [LiveEegPlotSnapshot] frames coalesced to <=20 Hz.
+final liveEegPlotSnapshotProvider =
+    StreamProvider<LiveEegPlotSnapshot>((ref) {
   final session = ref.watch(acquisitionSessionProvider);
-  await for (final _ in session.hub.uiAvailable) {
-    final batch = session.hub.takeUiEeg(max: 1);
-    if (batch.isNotEmpty) {
-      yield batch.last.wallClock;
+  const frameInterval = Duration(milliseconds: 50); // 20 Hz max
+
+  return Stream<LiveEegPlotSnapshot>.multi((controller) {
+    final ring = LiveEegRingBuffer();
+    Timer? flushTimer;
+    var dirty = false;
+
+    void emitSnapshot() {
+      if (controller.isClosed) return;
+      dirty = false;
+      controller.add(ring.snapshot());
     }
-  }
+
+    void scheduleFlush() {
+      dirty = true;
+      if (flushTimer != null && flushTimer!.isActive) return;
+      flushTimer = Timer(frameInterval, () {
+        flushTimer = null;
+        if (dirty) {
+          emitSnapshot();
+        }
+      });
+    }
+
+    void drainAvailable() {
+      while (true) {
+        final batch = session.hub.takeUiEeg(max: 64);
+        if (batch.isEmpty) break;
+        ring.pushAll(batch);
+        scheduleFlush();
+      }
+    }
+
+    // Seed initial snapshot so consumers render immediately without spinner flicker.
+    drainAvailable();
+    controller.add(ring.snapshot());
+
+    final uiSub = session.hub.uiAvailable.listen(
+      (_) => drainAvailable(),
+      onError: controller.addError,
+      onDone: controller.close,
+    );
+
+    final stateSub = session.stateStream.listen((state) {
+      if (state is AcquisitionIdle ||
+          state is AcquisitionScanning ||
+          state is AcquisitionConnecting) {
+        if (ring.length > 0 || ring.cqHistoryLength > 0) {
+          ring.clear();
+          flushTimer?.cancel();
+          flushTimer = null;
+          emitSnapshot();
+        }
+      }
+    });
+
+    controller.onCancel = () async {
+      flushTimer?.cancel();
+      flushTimer = null;
+      await uiSub.cancel();
+      await stateSub.cancel();
+    };
+  });
+});
+
+/// Emits the latest sample wallClock when fresh EEG data reaches the UI plot path.
+final uiEegActivityProvider = Provider<AsyncValue<DateTime?>>((ref) {
+  return ref
+      .watch(liveEegPlotSnapshotProvider)
+      .whenData((snap) => snap.lastWallClock);
 });
 
 final bookmarkRepositoryProvider = Provider<BookmarkStore>((ref) {

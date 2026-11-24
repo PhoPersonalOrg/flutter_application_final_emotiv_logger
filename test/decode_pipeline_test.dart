@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:encrypt/encrypt.dart';
 import 'package:flutter_emotiv_logger/decode/crypto_codec.dart';
 import 'package:flutter_emotiv_logger/decode/decode_pipeline.dart';
 import 'package:flutter_emotiv_logger/domain/samples.dart';
@@ -88,6 +89,43 @@ void main() {
 
     final result = await future.timeout(const Duration(seconds: 5));
     expect(result, isA<DecodeFailed>());
+
+    await pipeline.dispose();
+  });
+
+  test('DecodePipeline plumbs Mode-7 contactQuality onto EegSample', () async {
+    final pipeline = DecodePipeline();
+    await pipeline.start();
+
+    final plain = Uint8List(32);
+    plain[0] = 5;
+    plain[1] = CryptoCodec.packetTypeEeg;
+    // word 7 at bytes 16..17 = 0x126B -> low 7 bits = 0x6B (107)
+    plain[16] = 0x6B;
+    plain[17] = 0x12;
+
+    final encrypter = Encrypter(AES(Key(key), mode: AESMode.ecb, padding: null));
+    final wire = BytesBuilder();
+    for (var c = 0; c < 32; c += 16) {
+      final block = encrypter.encryptBytes(plain.sublist(c, c + 16)).bytes;
+      wire.add([for (final b in block) b ^ 0x55]);
+    }
+
+    final future = pipeline.results.first;
+    pipeline.submit(
+      RawPacket(
+        kind: PacketKind.eeg,
+        bytes: wire.toBytes(),
+        receiveMonoUs: 123,
+        wallClock: DateTime.fromMillisecondsSinceEpoch(1000),
+      ),
+      keyBytes: key,
+    );
+
+    final result = await future.timeout(const Duration(seconds: 5));
+    expect(result, isA<DecodeEegOk>());
+    final sample = (result as DecodeEegOk).sample;
+    expect(sample.contactQuality, 0x6B);
 
     await pipeline.dispose();
   });

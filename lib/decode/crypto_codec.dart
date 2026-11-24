@@ -9,6 +9,7 @@ class EegFrame {
     required this.counter,
     required this.packetType,
     required this.values,
+    this.contactQuality,
   });
 
   /// Plaintext byte 0. Runs 0..sampleRate-1 and wraps once per second.
@@ -20,6 +21,10 @@ class EegFrame {
 
   /// 14 values in microvolts, ordered as `EegSample.channelNames`.
   final List<double> values;
+
+  /// Mode-7 broadcast contact quality (`word[7] & 0x7f`, `0..127`) when
+  /// [packetType] is [CryptoCodec.packetTypeEeg]; null otherwise.
+  final int? contactQuality;
 
   /// Android routes these to the motion path and skips the EEG ADC scale.
   bool get isMotionType => packetType == CryptoCodec.packetTypeMotion;
@@ -192,10 +197,12 @@ class CryptoCodec {
       throw StateError('Decrypted EEG payload shorter than 32 bytes');
     }
     int word(int k) => dec[2 + 2 * k] | (dec[3 + 2 * k] << 8);
+    final type = dec[1] & 0x7f;
     return EegFrame(
       counter: dec[0],
-      packetType: dec[1] & 0x7f,
+      packetType: type,
       values: [for (final k in eegSampleOrder) word(k) / divisor],
+      contactQuality: type == packetTypeEeg ? (word(7) & 0x7f) : null,
     );
   }
 

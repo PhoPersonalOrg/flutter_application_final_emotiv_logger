@@ -104,6 +104,33 @@ void main() {
       expect(frame.values, isNot(contains(closeTo(words[7] / 7.8, 1e-9))));
     });
 
+    test('word 7 low 7 bits decode as Mode-7 contactQuality on type 0x10', () {
+      final cqWords = List<int>.filled(15, 7800);
+      cqWords[7] = 0x12AB; // low 7 bits = 0x2B (43)
+      final cqPacket = _encryptLikeHeadset(
+        key,
+        _plainEegPackage(counter: 7, words: cqWords),
+      );
+      final frame = CryptoCodec.decryptEegFrames(key, cqPacket).single;
+      expect(frame.contactQuality, 0x2B);
+      expect(frame.contactQuality, cqWords[7] & 0x7f);
+    });
+
+    test('motion-type packages have null contactQuality', () {
+      final motionWords = List<int>.filled(15, 0)..[7] = 0x55;
+      final motionType = _encryptLikeHeadset(
+        key,
+        _plainEegPackage(
+          counter: 1,
+          words: motionWords,
+          type: CryptoCodec.packetTypeMotion,
+        ),
+      );
+      final frame = CryptoCodec.decryptEegFrames(key, motionType).single;
+      expect(frame.isMotionType, isTrue);
+      expect(frame.contactQuality, isNull);
+    });
+
     test('14-bit resolution scales by 1.95, 16-bit by 7.8', () {
       final v16 = CryptoCodec.decryptEeg(key, packet);
       final v14 = CryptoCodec.decryptEeg(key, packet, resolutionBits: 14);
