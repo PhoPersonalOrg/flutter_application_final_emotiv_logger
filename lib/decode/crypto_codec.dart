@@ -23,7 +23,8 @@ class EegFrame {
   final List<double> values;
 
   /// Mode-7 broadcast contact quality (`word[7] & 0x7f`, `0..127`) when
-  /// [packetType] is [CryptoCodec.packetTypeEeg]; null otherwise.
+  /// [packetType] is [CryptoCodec.packetTypeEeg] **and** [counter] is a CQ
+  /// gate tick ([CryptoCodec.isContactQualityCounter]); null otherwise.
   final int? contactQuality;
 
   /// Android routes these to the motion path and skips the EEG ADC scale.
@@ -59,6 +60,12 @@ class CryptoCodec {
 
   static const int packetTypeEeg = 0x10;
   static const int packetTypeMotion = 0x20;
+
+  /// Android EpocPlusMode only latches CQ when
+  /// `counter == sampleRate - 1` (decryptor+0xb0). Accept both 128 Hz and
+  /// 256 Hz wrap ticks.
+  static bool isContactQualityCounter(int counter) =>
+      counter == 127 || counter == 255;
 
   /// `EpocXDataValueCorrection::convertADCToMicrovolt`: raw / 1.95 when the
   /// headset is configured for 14-bit EEG, raw / 7.8 for 16-bit.
@@ -192,17 +199,25 @@ class CryptoCodec {
 
   /// Plaintext package layout: byte 0 counter, byte 1 type, bytes 2..31
   /// fifteen little-endian uint16 words (`unpack_bits_plusMode`).
+  ///
+  /// Mode-7 CQ (`word[7] & 0x7f`) is only valid on the sample-rate wrap tick
+  /// (`counter == rate - 1`); ungated packages leave [EegFrame.contactQuality]
+  /// null so callers can hold the previous value.
   static EegFrame _frameFromPlaintext(Uint8List dec, double divisor) {
     if (dec.length < eegPacketBytes) {
       throw StateError('Decrypted EEG payload shorter than 32 bytes');
     }
     int word(int k) => dec[2 + 2 * k] | (dec[3 + 2 * k] << 8);
+    final counter = dec[0];
     final type = dec[1] & 0x7f;
+    final gatedCq = type == packetTypeEeg && isContactQualityCounter(counter)
+        ? (word(7) & 0x7f)
+        : null;
     return EegFrame(
-      counter: dec[0],
+      counter: counter,
       packetType: type,
       values: [for (final k in eegSampleOrder) word(k) / divisor],
-      contactQuality: type == packetTypeEeg ? (word(7) & 0x7f) : null,
+      contactQuality: gatedCq,
     );
   }
 

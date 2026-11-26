@@ -3,7 +3,8 @@ import 'package:flutter/material.dart';
 /// Discrete contact-quality tiers matching pyPhoTimeline `eeg_quality_colors.py`.
 ///
 /// Epoc X Mode-7 exposes a single broadcast `word7 & 0x7f` (`0..127`) for all
-/// 14 electrodes. Bands map onto pyPhoTimeline's 4-tier palette:
+/// 14 electrodes, latched only when `counter == sampleRate - 1` (~1 Hz). Bands
+/// map onto pyPhoTimeline's 4-tier palette:
 /// - `<= 0` → [ContactQualityTier.unknown] (`#808080`)
 /// - `1..31` → [ContactQualityTier.poor] (`#d32f2f`)
 /// - `32..63` → [ContactQualityTier.fair] (`#f57c00`)

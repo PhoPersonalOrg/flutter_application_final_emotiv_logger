@@ -63,7 +63,8 @@ class EegSample {
   final int receiveMonoUs;
   final DateTime wallClock;
 
-  /// Mode-7 broadcast contact quality (`0..127`), or `0` when unknown.
+  /// Mode-7 broadcast contact quality (`0..127`), held from the last gated
+  /// counter tick (`sampleRate - 1`); `0` when unknown / not yet latched.
   final int contactQuality;
 
   /// 14-channel broadcast CQ vector matching `emotiv-lsl` / `emotiv-lsl-cpp`.

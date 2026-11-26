@@ -86,10 +86,13 @@ class DecodePipeline {
     boot.handshake.send(inbox.sendPort);
     final out = boot.results;
     final counters = EegCounterMonitor();
+    // Android CQ cache: latch Mode-7 word7 only on gated counters, hold between.
+    var heldContactQuality = 0;
 
     inbox.listen((message) {
       if (message is _ResetJob) {
         counters.reset();
+        heldContactQuality = 0;
         return;
       }
       if (message is! _DecodeJob) return;
@@ -127,13 +130,17 @@ class DecodePipeline {
                 );
                 continue;
               }
+              final gated = frame.contactQuality;
+              if (gated != null) {
+                heldContactQuality = gated;
+              }
               out.send(
                 DecodeEegOk(
                   EegSample(
                     values: frame.values,
                     receiveMonoUs: message.receiveMonoUs,
                     wallClock: wall,
-                    contactQuality: frame.contactQuality ?? 0,
+                    contactQuality: heldContactQuality,
                   ),
                 ),
               );

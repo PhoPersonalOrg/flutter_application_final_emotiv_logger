@@ -478,6 +478,13 @@ class _SignalPreviewCard extends StatelessWidget {
                 contactQuality: cq,
                 height: 128,
               ),
+              const SizedBox(height: 4),
+              Text(
+                'Mode-7: single headset CQ (all sensors)',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Colors.grey.shade600,
+                    ),
+              ),
             ],
           ],
         ),

@@ -2,9 +2,6 @@
   "folders": [
     {
       "path": "."
-    },
-    {
-      "path": "../ACTIVE_DEV/emotiv-lsl"
     }
   ],
   "settings": {
