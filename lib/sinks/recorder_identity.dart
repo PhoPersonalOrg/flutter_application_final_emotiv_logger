@@ -34,7 +34,7 @@ Future<RecorderIdentity> resolveRecorderIdentity({
 }) async {
   final versionName = await _appVersionName();
   final deviceId = await _recorderDeviceId();
-  final gpsResult = await tryCaptureGps(timeout: gpsTimeout);
+  final gpsResult = await _tryCaptureGps(timeout: gpsTimeout);
   return RecorderIdentity(
     deviceId: deviceId,
     appVersionName: versionName,
@@ -50,7 +50,7 @@ class _GpsCapture {
 }
 
 /// Best-effort single GPS fix. Never throws; never blocks longer than [timeout].
-Future<_GpsCapture> tryCaptureGps({
+Future<_GpsCapture> _tryCaptureGps({
   Duration timeout = const Duration(seconds: 4),
 }) async {
   try {

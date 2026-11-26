@@ -1,48 +1,47 @@
 import 'package:flutter/material.dart';
 
-/// Discrete contact-quality tiers matching pyPhoTimeline `eeg_quality_colors.py`.
+/// Discrete contact-quality tiers matching pyPhoTimeline `eeg_quality_colors.py`
+/// and Cortex discrete Contact Quality grades (`04_EpocX_Packet_Crypto_and_Codec.md` §7.1).
 ///
-/// Epoc X Mode-7 exposes a single broadcast `word7 & 0x7f` (`0..127`) for all
-/// 14 electrodes, latched only when `counter == sampleRate - 1` (~1 Hz). Bands
-/// map onto pyPhoTimeline's 4-tier palette:
-/// - `<= 0` → [ContactQualityTier.unknown] (`#808080`)
-/// - `1..31` → [ContactQualityTier.poor] (`#d32f2f`)
-/// - `32..63` → [ContactQualityTier.fair] (`#f57c00`)
-/// - `64..95` → [ContactQualityTier.good] (`#fdd835`)
-/// - `>= 96` → [ContactQualityTier.excellent] (`#43a047`)
+/// Cortex discrete per-electrode grades (`{0, 1, 2, 4}`, plus `3` on Insight 2):
+/// - `0` (`metric < 0.2`) -> [ContactQualityTier.unknown] (`#808080`, No contact)
+/// - `1` (`0.2 <= metric < 0.7`) -> [ContactQualityTier.poor] (`#d32f2f`)
+/// - `2` (`0.7 <= metric < 1.7`) -> [ContactQualityTier.fair] (`#f57c00`)
+/// - `3` -> [ContactQualityTier.good] (`#fdd835`)
+/// - `4` (`metric >= 1.7`) -> [ContactQualityTier.excellent] (`#43a047`)
 enum ContactQualityTier {
   unknown(
     index_: 0,
     label: 'None',
-    legendLabel: 'Unknown (0)',
+    legendLabel: 'None (0)',
     color: Color(0xFF808080),
     overlayAlpha: 1.0,
   ),
   poor(
     index_: 1,
     label: 'Poor',
-    legendLabel: 'Poor (1–31)',
+    legendLabel: 'Poor (1)',
     color: Color(0xFFD32F2F),
     overlayAlpha: 0.95,
   ),
   fair(
     index_: 2,
     label: 'Fair',
-    legendLabel: 'Fair (32–63)',
+    legendLabel: 'Fair (2)',
     color: Color(0xFFF57C00),
     overlayAlpha: 0.70,
   ),
   good(
     index_: 3,
     label: 'Good',
-    legendLabel: 'Good (64–95)',
+    legendLabel: 'Good (3)',
     color: Color(0xFFFDD835),
     overlayAlpha: 0.30,
   ),
   excellent(
     index_: 4,
     label: 'Excellent',
-    legendLabel: 'Excellent (96–127)',
+    legendLabel: 'Excellent (4)',
     color: Color(0xFF43A047),
     overlayAlpha: 0.0,
   );
@@ -72,17 +71,33 @@ enum ContactQualityTier {
     excellent,
   ];
 
-  /// Contrasting foreground label color for [color], matching
-  /// `EmotivEpocXElectrodeQualityWidget._label_color_for_fill`.
+  /// Contrasting foreground label color for [color].
   Color get labelColor {
-    final luma =
-        0.299 * color.r + 0.587 * color.g + 0.114 * color.b;
-    return luma < 0.55
-        ? const Color(0xFFFAFAFA)
-        : const Color(0xFF202020);
+    final luma = 0.299 * color.r + 0.587 * color.g + 0.114 * color.b;
+    return luma < 0.55 ? const Color(0xFFFAFAFA) : const Color(0xFF202020);
   }
 
-  /// Map Mode-7 raw CQ (`0..127`) to a discrete tier.
+  /// Map discrete Cortex per-electrode CQ grade (`0, 1, 2, 3, 4`) to a tier.
+  static ContactQualityTier fromCortexGrade(int? grade) {
+    if (grade == null || grade <= 0) return unknown;
+    return switch (grade) {
+      1 => poor,
+      2 => fair,
+      3 => good,
+      _ => excellent,
+    };
+  }
+
+  /// Map overall CQ percentage (`0..100`) to a summary tier.
+  static ContactQualityTier fromOverallPercent(int? percent) {
+    if (percent == null || percent <= 0) return unknown;
+    if (percent < 25) return poor;
+    if (percent < 50) return fair;
+    if (percent < 75) return good;
+    return excellent;
+  }
+
+  /// Legacy `0..127` band mapper retained for compatibility.
   static ContactQualityTier fromMode7Raw(int? cq) {
     if (cq == null || cq <= 0) return unknown;
     if (cq <= 31) return poor;

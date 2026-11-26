@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import '../app/save_directory_policy.dart';
 import '../decode/crypto_codec.dart';
 import '../decode/device_identity.dart';
+import '../decode/headset_config.dart';
 import '../domain/samples.dart';
 import 'recorder_identity.dart';
 import 'sample_hub.dart';
@@ -24,7 +25,8 @@ class CsvSessionStart {
   final String? message;
 }
 
-/// Session-directory CSV/raw writer with ordered flush on teardown.
+/// Session-directory CSV/raw writer (`session.json`, `eeg.csv`, `motion.csv`,
+/// `cq.csv`, `raw.csv`) with ordered flush on teardown.
 class CsvSink {
   CsvSink({required this.hub});
 
@@ -33,6 +35,7 @@ class CsvSink {
   Directory? _sessionDir;
   IOSink? _eeg;
   IOSink? _motion;
+  IOSink? _cq;
   IOSink? _raw;
   Timer? _flushTimer;
   StreamSubscription? _sub;
@@ -45,10 +48,22 @@ class CsvSink {
   Future<CsvSessionStart> startSession({
     required String? saveDirectory,
     required DeviceIdentity identity,
+    HeadsetConfig? headsetConfig,
     int eegResolutionBits = CryptoCodec.defaultEegResolutionBits,
+    HeadbandPosition headbandPosition = HeadbandPosition.top,
+    int? negotiatedMtu,
   }) async {
     await stop();
     _closed = false;
+
+    final cfg = headsetConfig ??
+        HeadsetConfig(
+          headsetFirmware: identity.sessionKey.firmwareVersion,
+          mode: identity.sessionKey.keyMode,
+          serialHex: identity.btKeyHex,
+          disSerialHex: identity.disSerialHex,
+          eegResolutionBits: eegResolutionBits,
+        );
 
     // iOS: ignore custom paths (File Provider / picker paths are not durable).
     final preferred = effectiveSaveDirectory(saveDirectory);
@@ -59,7 +74,9 @@ class CsvSink {
         final path = await _openUnder(
           Directory(preferred),
           identity,
-          eegResolutionBits: eegResolutionBits,
+          cfg: cfg,
+          headbandPosition: headbandPosition,
+          negotiatedMtu: negotiatedMtu,
         );
         return CsvSessionStart(
           sessionPath: path,
@@ -76,7 +93,9 @@ class CsvSink {
       final path = await _openUnder(
         docs,
         identity,
-        eegResolutionBits: eegResolutionBits,
+        cfg: cfg,
+        headbandPosition: headbandPosition,
+        negotiatedMtu: negotiatedMtu,
       );
       final msg = customError == null
           ? 'CSV writing to app documents: $path'
@@ -97,7 +116,9 @@ class CsvSink {
   Future<String> _openUnder(
     Directory base,
     DeviceIdentity identity, {
-    required int eegResolutionBits,
+    required HeadsetConfig cfg,
+    required HeadbandPosition headbandPosition,
+    required int? negotiatedMtu,
   }) async {
     if (!await base.exists()) {
       await base.create(recursive: true);
@@ -118,13 +139,24 @@ class CsvSink {
       'gps': recorder.gps,
       'gps_status': recorder.gpsStatus ?? 'unavailable',
       'btKeyHex': identity.btKeyHex,
+      'disSerialHex': identity.disSerialHex,
       'serialSource': 'ble_hex',
+      'serialOrigin': identity.serialOrigin,
       'keyFingerprint': identity.keyFingerprint,
-      'eegResolutionBits': eegResolutionBits,
-      'eegRateHz': EegSample.nominalRateHz,
-      'motionRateHz': MotionSample.nominalRateHz,
+      'headsetFirmware': cfg.headsetFirmware,
+      'headsetFirmwareHex': cfg.headsetFirmwareHex,
+      'cryptoVersion': identity.sessionKey.isV4 ? 4 : 2,
+      'headsetMode': cfg.mode,
+      'headsetConfigHex': cfg.rawConfigHex,
+      'eegResolutionBits': cfg.eegResolutionBits,
+      'eegRateHz': cfg.eegRateHz.toDouble(),
+      'motionRateHz': cfg.memsRateHz.toDouble(),
+      'motionResolutionBits': cfg.memsResolutionBits,
+      'headbandPosition': headbandPosition.storageValue,
+      'negotiatedMtu': negotiatedMtu,
       'eegChannels': EegSample.channelNames,
       'motionChannels': MotionSample.channelNames,
+      'cqChannels': EegSample.qualityChannelNames,
     };
     await File('${sessionDir.path}/session.json').writeAsString(
       const JsonEncoder.withIndent('  ').convert(meta),
@@ -132,11 +164,18 @@ class CsvSink {
 
     _sessionDir = sessionDir;
     _eeg = File('${sessionDir.path}/eeg.csv').openWrite();
-    _eeg!.writeln('wall_ms,mono_us,${EegSample.channelNames.join(',')}');
+    _eeg!.writeln(
+      'wall_ms,mono_us,counter,marker_hw,${EegSample.channelNames.join(',')}',
+    );
 
     _motion = File('${sessionDir.path}/motion.csv').openWrite();
     _motion!.writeln(
-      'wall_ms,mono_us,${MotionSample.channelNames.join(',')}',
+      'wall_ms,mono_us,counter_mems,${MotionSample.channelNames.join(',')}',
+    );
+
+    _cq = File('${sessionDir.path}/cq.csv').openWrite();
+    _cq!.writeln(
+      'wall_ms,mono_us,counter,overall_cq,battery_pct,${EegSample.qualityChannelNames.join(',')}',
     );
 
     _raw = File('${sessionDir.path}/raw.csv').openWrite();
@@ -160,13 +199,17 @@ class CsvSink {
   void _drain() {
     if (_closed) return;
     for (final s in hub.takeCsvEeg()) {
+      final wallMs = s.wallClock.millisecondsSinceEpoch;
       _eeg?.writeln(
-        '${s.wallClock.millisecondsSinceEpoch},${s.receiveMonoUs},${s.values.join(',')}',
+        '$wallMs,${s.receiveMonoUs},${s.counter},${s.markerHw},${s.values.join(',')}',
+      );
+      _cq?.writeln(
+        '$wallMs,${s.receiveMonoUs},${s.counter},${s.overallCq},${s.batteryPercent ?? ''},${s.contactQualityGrades.join(',')}',
       );
     }
     for (final s in hub.takeCsvMotion()) {
       _motion?.writeln(
-        '${s.wallClock.millisecondsSinceEpoch},${s.receiveMonoUs},${s.values.join(',')}',
+        '${s.wallClock.millisecondsSinceEpoch},${s.receiveMonoUs},${s.counterMems},${s.values.join(',')}',
       );
     }
     for (final p in hub.takeCsvRaw()) {
@@ -181,6 +224,7 @@ class CsvSink {
     _drain();
     await _eeg?.flush();
     await _motion?.flush();
+    await _cq?.flush();
     await _raw?.flush();
   }
 
@@ -201,10 +245,14 @@ class CsvSink {
       await _motion?.close();
     } catch (_) {}
     try {
+      await _cq?.close();
+    } catch (_) {}
+    try {
       await _raw?.close();
     } catch (_) {}
     _eeg = null;
     _motion = null;
+    _cq = null;
     _raw = null;
   }
 }

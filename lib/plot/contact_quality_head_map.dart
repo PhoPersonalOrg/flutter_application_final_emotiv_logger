@@ -103,8 +103,6 @@ class EpocXHeadSvgGeometry {
     r'<g(?:\s+transform="matrix\(1,0,0,1,(-?[0-9.]+),(-?[0-9.]+)\)")?>\s*<path\s+d="([^"]+)"\s+fill="([^"]+)"',
   );
 
-  /// Parse viewBox, `<circle id="..."/>` hit regions, and head/arm silhouette
-  /// paths directly from the bundled SVG XML (no external SVG package required).
   static EpocXHeadSvgGeometry parseSvgXml(String xml) {
     var viewBox = fallback.viewBox;
     final vbMatch = _viewBoxRe.firstMatch(xml);
@@ -145,9 +143,6 @@ class EpocXHeadSvgGeometry {
       }
     }
 
-    // Parse only the head outline + headset arm paths (the `translate(-1, -8)`
-    // artwork groups before glyph label paths, skipping `#00c558` baked green
-    // pads and `#dffef0` baked text paths since we paint live tier circles + labels).
     final silhouettePaths = <EpocXStyledSvgPath>[];
     for (final m in _groupPathRe.allMatches(xml)) {
       final tx = double.tryParse(m.group(1) ?? '0') ?? 0.0;
@@ -173,8 +168,7 @@ class EpocXHeadSvgGeometry {
   }
 
   static Color? _resolveSvgFill(String fillAttr) {
-    if (fillAttr.startsWith("url(")) {
-      // Head silhouette / shading gradients in `emotiv_epoc_x_head_layout.svg`.
+    if (fillAttr.startsWith('url(')) {
       return const Color(0xFFC5D5E8);
     }
     if (fillAttr == '#000000') return const Color(0xFF1E242B);
@@ -320,22 +314,26 @@ class EpocXStyledSvgPath {
   final Color color;
 }
 
-/// Live Emotiv EPOC X 14-electrode contact-quality head map + compact legend,
-/// ported from pyPhoTimeline `EmotivEpocXElectrodeQualityWidget`.
-///
-/// Mode-7 CQ is a single broadcast value (`0..127`) shared across all 14
-/// electrodes; [perChannelRawCq] is also accepted for future per-electrode modes.
+/// Live Emotiv EPOC X 14-electrode per-channel contact-quality head map + legend.
 class ContactQualityHeadMap extends StatefulWidget {
   const ContactQualityHeadMap({
     super.key,
-    required this.contactQuality,
-    this.perChannelRawCq,
+    this.channelGrades,
+    this.overallCq = 0,
+    this.perChannelGrades,
     this.height = 148,
     this.showLegend = true,
   });
 
-  final int contactQuality;
-  final Map<String, int>? perChannelRawCq;
+  /// 14 discrete Cortex CQ grades (`0, 1, 2, 4`) in `EegSample.channelNames` order.
+  final List<int>? channelGrades;
+
+  /// Optional fallback overall CQ percentage (`0..100`) when [channelGrades] is absent.
+  final int overallCq;
+
+  /// Optional named map of channel -> Cortex CQ grade (`0..4`).
+  final Map<String, int>? perChannelGrades;
+
   final double height;
   final bool showLegend;
 
@@ -358,7 +356,8 @@ class _ContactQualityHeadMapState extends State<ContactQualityHeadMap> {
 
   @override
   Widget build(BuildContext context) {
-    final broadcastTier = ContactQualityTier.fromMode7Raw(widget.contactQuality);
+    final fallbackTier =
+        ContactQualityTier.fromOverallPercent(widget.overallCq);
 
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -370,9 +369,9 @@ class _ContactQualityHeadMapState extends State<ContactQualityHeadMap> {
             child: CustomPaint(
               painter: _ContactQualityHeadPainter(
                 geometry: _geometry,
-                broadcastCq: widget.contactQuality,
-                broadcastTier: broadcastTier,
-                perChannelRawCq: widget.perChannelRawCq,
+                channelGrades: widget.channelGrades,
+                perChannelGrades: widget.perChannelGrades,
+                fallbackTier: fallbackTier,
               ),
             ),
           ),
@@ -425,15 +424,15 @@ class ContactQualityTierLegend extends StatelessWidget {
 class _ContactQualityHeadPainter extends CustomPainter {
   _ContactQualityHeadPainter({
     required this.geometry,
-    required this.broadcastCq,
-    required this.broadcastTier,
-    this.perChannelRawCq,
+    required this.fallbackTier,
+    this.channelGrades,
+    this.perChannelGrades,
   });
 
   final EpocXHeadSvgGeometry geometry;
-  final int broadcastCq;
-  final ContactQualityTier broadcastTier;
-  final Map<String, int>? perChannelRawCq;
+  final ContactQualityTier fallbackTier;
+  final List<int>? channelGrades;
+  final Map<String, int>? perChannelGrades;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -462,7 +461,6 @@ class _ContactQualityHeadPainter extends CustomPainter {
         canvas.drawPath(item.path, p);
       }
     } else {
-      // Clean schematic scalp outline if asset paths aren't loaded yet.
       final headCenter = const Offset(133.5, 196.0);
       final headRect = Rect.fromCenter(
         center: headCenter,
@@ -480,7 +478,6 @@ class _ContactQualityHeadPainter extends CustomPainter {
           ..style = PaintingStyle.stroke
           ..strokeWidth = 2.0,
       );
-      // Nose indicator at top.
       final nose = Path()
         ..moveTo(121, 64)
         ..lineTo(133.5, 42)
@@ -508,14 +505,19 @@ class _ContactQualityHeadPainter extends CustomPainter {
       maxLines: 1,
     );
 
-    for (final channel in EegSample.channelNames) {
+    for (var chIdx = 0; chIdx < EegSample.channelNames.length; chIdx++) {
+      final channel = EegSample.channelNames[chIdx];
       final circle = geometry.electrodes[channel];
       if (circle == null) continue;
 
-      final chCq = perChannelRawCq?[channel] ?? broadcastCq;
-      final tier = perChannelRawCq != null
-          ? ContactQualityTier.fromMode7Raw(chCq)
-          : broadcastTier;
+      ContactQualityTier tier;
+      if (perChannelGrades != null && perChannelGrades!.containsKey(channel)) {
+        tier = ContactQualityTier.fromCortexGrade(perChannelGrades![channel]);
+      } else if (channelGrades != null && chIdx < channelGrades!.length) {
+        tier = ContactQualityTier.fromCortexGrade(channelGrades![chIdx]);
+      } else {
+        tier = fallbackTier;
+      }
 
       final cx = tx + circle.cx * scale;
       final cy = ty + circle.cy * scale;
@@ -546,8 +548,18 @@ class _ContactQualityHeadPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _ContactQualityHeadPainter oldDelegate) {
-    return oldDelegate.broadcastCq != broadcastCq ||
+    if (oldDelegate.fallbackTier != fallbackTier ||
         !identical(oldDelegate.geometry, geometry) ||
-        oldDelegate.perChannelRawCq != perChannelRawCq;
+        oldDelegate.perChannelGrades != perChannelGrades) {
+      return true;
+    }
+    final a = oldDelegate.channelGrades;
+    final b = channelGrades;
+    if (identical(a, b)) return false;
+    if (a == null || b == null || a.length != b.length) return true;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return true;
+    }
+    return false;
   }
 }

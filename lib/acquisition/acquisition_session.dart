@@ -1,11 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 import '../app/settings.dart';
-import '../decode/crypto_codec.dart';
 import '../decode/decode_pipeline.dart';
 import '../decode/device_identity.dart';
 import '../decode/headset_config.dart';
@@ -24,7 +24,7 @@ import 'ble_fsm_policy.dart';
 import 'session_subscriptions.dart';
 import 'streaming_foreground_service.dart';
 
-/// Owns the BLE acquisition FSM, decode pipeline, and sinks.
+/// Owns the EPOC X BLE GATT acquisition FSM, V2/V4 decode isolate, and sinks.
 class AcquisitionSession {
   AcquisitionSession({
     AppSettings? initialSettings,
@@ -82,12 +82,13 @@ class AcquisitionSession {
 
   final Map<String, BluetoothDevice> _discovered = {};
   final Map<String, int> _rssi = {};
+  final Map<String, String> _advNames = {};
   BluetoothDevice? _device;
   String? _preferredName;
   String? _preferredId;
   DeviceIdentity? _identity;
-  Uint8List? _keyBytes;
-  int _eegResolutionBits = CryptoCodec.defaultEegResolutionBits;
+  HeadsetConfig _headsetConfig = HeadsetConfig.bleDefaults();
+  int? _negotiatedMtu;
   bool _acceptPackets = false;
   bool _userStopRequested = false;
   bool _autoConnectPreferred = false;
@@ -114,16 +115,42 @@ class AcquisitionSession {
   /// Test/diagnostic: whether scan subscriptions are currently held.
   int get scanSubscriptionCountForTest => _scanSubs.length;
 
+  /// Service UUID filter passed to `FlutterBluePlus.startScan`:
+  /// - On iOS/macOS, CoreBluetooth requires `[epocXService]` for `bluetooth-central`
+  ///   background scanning and merges active `SCAN_RSP` (`81072f40`) automatically.
+  /// - On Android/Windows/Linux, scan unfiltered with active scanning (`lowLatency`)
+  ///   and filter via `isEmotivScanCandidate` so OEM hardware filters never drop
+  ///   `ADV_IND` (`"EPOCX (<8HEX>)"`) before `SCAN_RSP` arrives.
+  static List<Guid> _platformScanServiceFilter() {
+    if (Platform.isIOS || Platform.isMacOS) {
+      return [Guid(EmotivBleUuids.epocXService)];
+    }
+    return const [];
+  }
+
+  String _resolvedDeviceName(BluetoothDevice device) {
+    final pName = device.platformName.trim();
+    if (pName.isNotEmpty) return pName;
+    final aName = device.advName.trim();
+    if (aName.isNotEmpty) return aName;
+    return (_advNames[device.remoteId.str] ?? '').trim();
+  }
+
   Future<void> updateSettings(AppSettings settings) async {
     final prev = _settings;
     _settings = settings;
     _preferredId = settings.preferredDeviceId ?? _preferredId;
     _preferredName = settings.preferredDeviceName ?? _preferredName;
+    if (prev.headbandPosition != settings.headbandPosition) {
+      _decode.updateHeadbandPosition(settings.headbandPosition);
+    }
     if (_state is AcquisitionStreaming || _state is AcquisitionPreparing) {
       unawaited(
         _network.configure(
           settings: settings,
           deviceId: _identity?.btKeyHex,
+          eegRateHz: _headsetConfig.eegRateHz.toDouble(),
+          motionRateHz: _headsetConfig.memsRateHz.toDouble(),
         ),
       );
       if (_state is AcquisitionStreaming &&
@@ -136,6 +163,8 @@ class AcquisitionSession {
                 enabled: settings.lslEnabled,
                 sourceId: _device!.remoteId.str,
                 hostname: settings.hostname,
+                eegRateHz: _headsetConfig.eegRateHz.toDouble(),
+                motionRateHz: _headsetConfig.memsRateHz.toDouble(),
               )
               .then((_) => _refreshStreamingHealth()),
         );
@@ -168,12 +197,14 @@ class AcquisitionSession {
       await _seedAlreadyConnected();
       _publishScanDevices(clearError: true);
 
+      // Active scanning (`SCAN_REQ` -> `SCAN_RSP`) is required because physical
+      // EPOC X puts `"EPOCX (<8HEX>)"` in `ADV_IND` and `81072f40` in `SCAN_RSP`.
       await FlutterBluePlus.startScan(
-        withServices: [
-          Guid(EmotivBleUuids.control),
-          Guid(EmotivBleUuids.serviceB),
-        ],
+        withServices: _platformScanServiceFilter(),
         timeout: const Duration(seconds: 30),
+        continuousUpdates: true,
+        continuousDivisor: 3,
+        androidScanMode: AndroidScanMode.lowLatency,
         androidUsesFineLocation: true,
       );
 
@@ -260,8 +291,11 @@ class AcquisitionSession {
       _emitToScanningWithError('Unknown device id: $deviceId');
       return;
     }
+    final name = _resolvedDeviceName(device);
     _preferredId = deviceId;
-    _preferredName = device.platformName;
+    if (name.isNotEmpty) {
+      _preferredName = name;
+    }
     _autoConnectPreferred = false;
     _autoConnectClaimed = false;
     _userStopRequested = false;
@@ -276,7 +310,7 @@ class AcquisitionSession {
     final epoch = _bumpEpoch();
     await _cancelReconnect();
     await _orderedTeardown(disconnectBle: true);
-    _mutateHealth((h) => h.copyWith(clearBatteryPercent: true));
+    _mutateHealth((h) => h.copyWith(clearHardwareTelemetry: true));
     _emit(AcquisitionIdle(health: _health));
     // Stop FGS after CSV flush/teardown so the process is not demoted mid-flush.
     await StreamingForegroundService.ensureStopped(epoch: epoch);
@@ -314,15 +348,16 @@ class AcquisitionSession {
     required int epoch,
   }) async {
     if (!_isEpochCurrent(epoch)) return;
+    final displayName = _resolvedDeviceName(device);
     _emit(
       AcquisitionConnecting(
-        deviceName: device.platformName,
+        deviceName: displayName,
         health: _health,
       ),
     );
     // Pin the process for connect+prepare+stream (kept through Reconnecting).
     await StreamingForegroundService.ensureStarted(
-      device.platformName,
+      displayName,
       epoch: epoch,
     );
     try {
@@ -335,6 +370,7 @@ class AcquisitionSession {
       await device.connect(
         timeout: const Duration(seconds: 15),
         license: License.nonprofit,
+        mtu: EmotivBleUuids.preferredRequestMtu,
       );
       if (!_isEpochCurrent(epoch)) {
         try {
@@ -357,16 +393,53 @@ class AcquisitionSession {
     }
   }
 
+  /// Negotiate `ATT_MTU >= 87` (required for `84B` `81072f41` super-frames) and
+  /// `7.5–10 ms` low-latency connection interval (`ConnectionPriority.high`).
+  Future<void> _negotiateLinkParameters(BluetoothDevice device) async {
+    _negotiatedMtu = null;
+    if (Platform.isAndroid) {
+      try {
+        await device.requestConnectionPriority(
+          connectionPriorityRequest: ConnectionPriority.high,
+        );
+      } catch (_) {}
+
+      var mtu = device.mtuNow;
+      if (mtu < EmotivBleUuids.minAttMtu) {
+        try {
+          mtu = await device.requestMtu(EmotivBleUuids.preferredRequestMtu);
+        } catch (_) {
+          mtu = device.mtuNow;
+        }
+      }
+      _negotiatedMtu = mtu;
+      if (mtu < EmotivBleUuids.minAttMtu) {
+        _mutateHealth(
+          (h) => h.copyWith(
+            decodeMessage:
+                'Warning: negotiated ATT_MTU=$mtu (< ${EmotivBleUuids.minAttMtu}); '
+                '84-byte combined EEG+Motion notifications may be truncated.',
+          ),
+        );
+      }
+    } else {
+      final cachedMtu = device.mtuNow;
+      if (cachedMtu > 23) {
+        _negotiatedMtu = cachedMtu;
+      }
+    }
+  }
+
   Future<void> _prepareAndStream(
     BluetoothDevice device, {
     required int epoch,
     required bool resumeReconnectOnFailure,
   }) async {
     if (!_isEpochCurrent(epoch)) return;
-    final name = device.platformName;
+    final initialName = _resolvedDeviceName(device);
     _emit(
       AcquisitionPreparing(
-        deviceName: name,
+        deviceName: initialName,
         sessionDir: _health.csvSessionPath ?? '',
         health: _health,
       ),
@@ -375,18 +448,28 @@ class AcquisitionSession {
     try {
       await _decode.start();
       if (!_isEpochCurrent(epoch)) return;
-      _decode.resetSession();
       _mutateHealth((h) => h.copyWith(clearDecodeMessage: true));
       await _decodeSub?.cancel();
       _decodeSub = _decode.results.listen(_onDecodeResult);
 
-      // Discover + config/serial extract must happen before CSV/LSL so identity
-      // can fall back to DIS serial when the advertising name is incomplete.
+      await _negotiateLinkParameters(device);
+      if (!_isEpochCurrent(epoch)) return;
+
+      // Discover services + read DIS 0x2A26 (FW), 0x2A25 (5B binary serial),
+      // and 81072f44 (6B mode config) BEFORE opening CSV/LSL outlets.
       await _armNotifications(device);
       if (!_isEpochCurrent(epoch)) return;
 
-      _identity ??= _identityResolver.resolveFromName(name);
-      _keyBytes = _identity!.keyBytes;
+      _mutateHealth(
+        (h) => h.copyWith(
+          headsetFirmwareHex: _headsetConfig.headsetFirmwareHex,
+          cryptoVersion: _identity!.sessionKey.isV4 ? 4 : 2,
+          negotiatedMtu: _negotiatedMtu,
+          configuredEegRateHz: _headsetConfig.eegRateHz,
+          configuredMotionRateHz: _headsetConfig.memsRateHz,
+        ),
+      );
+
       await _rememberPreferred(
         id: device.remoteId.str,
         name: _identity!.deviceName,
@@ -399,7 +482,10 @@ class AcquisitionSession {
         final csvStart = await _csv.startSession(
           saveDirectory: _settings.saveDirectory,
           identity: _identity!,
-          eegResolutionBits: _eegResolutionBits,
+          headsetConfig: _headsetConfig,
+          eegResolutionBits: _headsetConfig.eegResolutionBits,
+          headbandPosition: _settings.headbandPosition,
+          negotiatedMtu: _negotiatedMtu,
         );
         sessionPath = csvStart.sessionPath;
         _mutateHealth(
@@ -422,6 +508,8 @@ class AcquisitionSession {
         enabled: _settings.lslEnabled,
         sourceId: device.remoteId.str,
         hostname: _settings.hostname,
+        eegRateHz: _headsetConfig.eegRateHz.toDouble(),
+        motionRateHz: _headsetConfig.memsRateHz.toDouble(),
       );
       if (!_isEpochCurrent(epoch)) return;
 
@@ -440,7 +528,8 @@ class AcquisitionSession {
       );
 
       if (!_isEpochCurrent(epoch)) return;
-      final streamingName = name.isEmpty ? _identity!.deviceName : name;
+      final streamingName =
+          initialName.isEmpty ? _identity!.deviceName : initialName;
       _emit(
         AcquisitionStreaming(
           deviceName: streamingName,
@@ -463,6 +552,8 @@ class AcquisitionSession {
         _network.configure(
           settings: _settings,
           deviceId: _identity!.btKeyHex,
+          eegRateHz: _headsetConfig.eegRateHz.toDouble(),
+          motionRateHz: _headsetConfig.memsRateHz.toDouble(),
         ),
       );
       if (sessionPath.isNotEmpty) {
@@ -479,7 +570,7 @@ class AcquisitionSession {
       await _orderedTeardown(disconnectBle: true);
       if (resumeReconnectOnFailure && !_userStopRequested) {
         await _beginReconnectAttempt(
-          name: name.isEmpty ? (_preferredName ?? 'device') : name,
+          name: initialName.isEmpty ? (_preferredName ?? 'device') : initialName,
         );
         return;
       }
@@ -489,105 +580,146 @@ class AcquisitionSession {
 
   Future<void> _armNotifications(BluetoothDevice device) async {
     final services = await device.discoverServices();
-    BluetoothCharacteristic? eegChar;
-    BluetoothCharacteristic? motionChar;
-    BluetoothCharacteristic? serviceBControl;
+    BluetoothCharacteristic? dataStreamChar;
+    BluetoothCharacteristic? legacyMotionChar;
     BluetoothCharacteristic? headsetConfigChar;
+    BluetoothCharacteristic? disModelChar;
     BluetoothCharacteristic? disSerialChar;
+    BluetoothCharacteristic? disFirmwareChar;
     BluetoothCharacteristic? batteryChar;
 
     for (final service in services) {
       for (final c in service.characteristics) {
         final id = c.uuid.toString();
-        if (EmotivBleUuids.isEeg(id)) {
-          // Prefer service A's EEG characteristic when both are present.
-          if (eegChar == null || id.toUpperCase() == EmotivBleUuids.eeg) {
-            eegChar = c;
-          }
-        } else if (EmotivBleUuids.isMotion(id)) {
-          motionChar = c;
-        } else if (EmotivBleUuids.isServiceBControl(id)) {
-          serviceBControl = c;
+        if (EmotivBleUuids.isDataStream(id)) {
+          dataStreamChar = c;
+        } else if (EmotivBleUuids.isLegacyMotion(id)) {
+          legacyMotionChar = c;
+        } else if (EmotivBleUuids.isIgnoredAux(id)) {
+          // 81072f43: recognized and ignored per CortexService 0x14088c630.
+          continue;
         } else if (EmotivBleUuids.isHeadsetConfig(id)) {
           headsetConfigChar = c;
+        } else if (EmotivBleUuids.isDisModelNumber(id)) {
+          disModelChar = c;
+        } else if (EmotivBleUuids.isDisSerialNumber(id)) {
+          disSerialChar = c;
+        } else if (EmotivBleUuids.isDisFirmwareRevision(id)) {
+          disFirmwareChar = c;
         } else if (EmotivBleUuids.isBatteryLevel(id)) {
           batteryChar = c;
-        } else if (_isDisSerial(id)) {
-          disSerialChar = c;
         }
       }
     }
 
-    if (eegChar == null) {
-      throw StateError('EEG characteristic not found');
+    if (dataStreamChar == null) {
+      throw StateError('EPOC X stream characteristic 81072f41 not found');
     }
 
-    _identity = _identityResolver.tryResolveFromName(device.platformName);
-    if (_identity == null && disSerialChar != null) {
+    // 1. Read DIS 0x2A24 (optional model/build string) & 0x2A26 (2B BE headset_fw).
+    String? modelStr;
+    if (disModelChar != null) {
       try {
-        final raw = await disSerialChar.read();
-        final serial = String.fromCharCodes(raw).trim();
-        if (serial.isNotEmpty) {
-          _identity = _identityResolver.resolveFromSerialHex(
-            device.platformName.isEmpty ? serial : device.platformName,
-            serial.replaceAll(RegExp(r'[^A-Fa-f0-9]'), ''),
-          );
-        }
+        modelStr = HeadsetConfig.parseDisModel0x2A24(await disModelChar.read());
       } catch (_) {}
     }
-    if (_identity == null) {
-      throw StateError(
-        'Could not resolve headset serial from name or DIS',
-      );
+
+    var headsetFw = HeadsetConfig.defaultFirmwareVersion;
+    if (disFirmwareChar != null) {
+      try {
+        final rawFw = await disFirmwareChar.read();
+        final parsedFw = HeadsetConfig.parseDisFirmware0x2A26(
+          rawFw,
+          modelNumber0x2A24: modelStr,
+        );
+        if (parsedFw != null && parsedFw > 0) {
+          headsetFw = parsedFw;
+        }
+      } catch (_) {}
+    } else if (modelStr != null && modelStr.contains('0200')) {
+      headsetFw = HeadsetConfig.legacyBleSplitMaxFirmware;
     }
 
-    _eegResolutionBits = CryptoCodec.defaultEegResolutionBits;
+    // 2. Read DIS 0x2A25 (5 raw binary serial bytes on physical EPOC X, e.g. e5 02 02 e9 2b).
+    List<int>? disSerialBytes;
+    if (disSerialChar != null) {
+      try {
+        disSerialBytes = await disSerialChar.read();
+      } catch (_) {}
+    }
+
+    // 3. Read 81072f44 (6-byte read-only mode configuration).
+    HeadsetConfig? parsedCfg;
     if (headsetConfigChar != null) {
       try {
-        final bytes = await headsetConfigChar.read();
-        final config = HeadsetConfig.parse(bytes);
-        if (config?.eegResolutionBits != null) {
-          _eegResolutionBits = config!.eegResolutionBits!;
-        }
+        final cfgBytes = await headsetConfigChar.read();
+        parsedCfg = HeadsetConfig.parse(
+          cfgBytes,
+          headsetFirmware: headsetFw,
+        );
       } catch (_) {}
     }
+    _headsetConfig = parsedCfg ??
+        HeadsetConfig.bleDefaults(headsetFirmware: headsetFw);
 
-    // The official Android app writes 02 1E to the service-B control
-    // characteristic during discovery, when the headset exposes it.
-    if (serviceBControl != null) {
+    // 4. Resolve V2 (fw <= 0x073E) or V4 (fw >= 0x073F) key schedule.
+    _identity = _identityResolver.resolveBleIdentity(
+      deviceName: _resolvedDeviceName(device),
+      dis0x2A25Bytes: disSerialBytes,
+      firmwareVersion: _headsetConfig.headsetFirmware,
+      keyMode: _headsetConfig.mode,
+    );
+
+    _headsetConfig = HeadsetConfig(
+      headsetType: _headsetConfig.headsetType,
+      mode: _headsetConfig.mode,
+      dongleFirmware: 0,
+      headsetFirmware: _headsetConfig.headsetFirmware,
+      serialHex: _identity!.btKeyHex,
+      disSerialHex: _identity!.disSerialHex,
+      eegRateHz: _headsetConfig.eegRateHz,
+      eegResolutionBits: _headsetConfig.eegResolutionBits,
+      memsRateHz: _headsetConfig.memsRateHz,
+      memsResolutionBits: _headsetConfig.memsResolutionBits,
+      rawConfigBytes: _headsetConfig.rawConfigBytes,
+    );
+
+    _decode.configureSession(
+      sessionKey: _identity!.sessionKey,
+      eegRateHz: _headsetConfig.eegRateHz,
+      eegResolutionBits: _headsetConfig.eegResolutionBits,
+      headbandPosition: _settings.headbandPosition,
+    );
+
+    // 5. Subscribe CCCD 0x2902 (01 00) on 81072f41 (and 81072f42 if present / fw <= 0x0710).
+    // Zero challenge/unlock writes are sent on EPOC X.
+    final streamUuid = dataStreamChar.uuid.toString();
+    await dataStreamChar.setNotifyValue(true);
+    _linkSubs.add(
+      dataStreamChar.lastValueStream.listen((data) {
+        if (!_acceptPackets || data.isEmpty) return;
+        _enqueueRaw(PacketKind.eeg, data, characteristicUuid: streamUuid);
+      }),
+    );
+
+    if (legacyMotionChar != null) {
+      final motionUuid = legacyMotionChar.uuid.toString();
       try {
-        await serviceBControl.write(
-          EmotivBleUuids.serviceBControlInit,
-          withoutResponse: false,
+        await legacyMotionChar.setNotifyValue(true);
+        _linkSubs.add(
+          legacyMotionChar.lastValueStream.listen((data) {
+            if (!_acceptPackets || data.isEmpty) return;
+            _enqueueRaw(
+              PacketKind.motion,
+              data,
+              characteristicUuid: motionUuid,
+            );
+          }),
         );
       } catch (_) {}
     }
 
-    final eegUuid = eegChar.uuid.toString();
-    await eegChar.setNotifyValue(true);
-    _linkSubs.add(
-      eegChar.lastValueStream.listen((data) {
-        if (!_acceptPackets || data.isEmpty) return;
-        _enqueueRaw(PacketKind.eeg, data, characteristicUuid: eegUuid);
-      }),
-    );
-
-    if (motionChar != null) {
-      final motionUuid = motionChar.uuid.toString();
-      await motionChar.setNotifyValue(true);
-      _linkSubs.add(
-        motionChar.lastValueStream.listen((data) {
-          if (!_acceptPackets || data.isEmpty) return;
-          _enqueueRaw(
-            PacketKind.motion,
-            data,
-            characteristicUuid: motionUuid,
-          );
-        }),
-      );
-    }
-
-    // Battery Level (`0x2A19`): optional BAS notify; missing is non-fatal.
+    // 6. Optional BAS 0x2A19 read/notify (complements primary in-band counter==Fs-1 battery latch).
     if (batteryChar != null) {
       try {
         final initial = await batteryChar.read();
@@ -602,9 +734,6 @@ class AcquisitionSession {
         );
       } catch (_) {}
     }
-
-    // Enabling notifications is all that starts the stream; the official app
-    // writes nothing to the EEG or motion characteristics.
   }
 
   void _applyBatteryPayload(List<int> data) {
@@ -619,11 +748,9 @@ class AcquisitionSession {
     List<int> data, {
     required String characteristicUuid,
   }) {
-    // Always capture non-empty notify payloads for offline re-decode, even
-    // when length/kind gates would reject live decode.
+    // Always capture non-empty notify payloads to raw.csv before length/split gates.
     final bytes = Uint8List.fromList(data);
     final now = DateTime.now();
-    // Headset clock is unavailable over BLE; wall + us is the receive timeline.
     final monoUs = now.microsecondsSinceEpoch;
     final packet = RawPacket(
       kind: kind,
@@ -635,22 +762,24 @@ class AcquisitionSession {
 
     _hub.publishRaw(packet);
 
-    final key = _keyBytes;
+    final sessionKey = _identity?.sessionKey;
     final longEnough = kind == PacketKind.eeg
         ? bytes.length >= EmotivBleUuids.eegMinBytes
         : bytes.length >= EmotivBleUuids.motionMinBytes;
-    if (key != null && longEnough) {
+    if (sessionKey != null && longEnough) {
       _decode.submit(
         packet,
-        keyBytes: key,
-        eegResolutionBits: _eegResolutionBits,
+        sessionKey: sessionKey,
+        eegRateHz: _headsetConfig.eegRateHz,
+        eegResolutionBits: _headsetConfig.eegResolutionBits,
+        headbandPosition: _settings.headbandPosition,
       );
     }
 
     if (kind == PacketKind.eeg) {
       if (_lastEegMonoUs != null) {
         final gapUs = monoUs - _lastEegMonoUs!;
-        // Expected ~7812 us at 128 Hz; flag large gaps (>50ms).
+        // 81072f41 notifications arrive in pairs (~15.6 ms at 128 Hz, ~7.8 ms at 256 Hz).
         if (gapUs > 50000) {
           _mutateHealth((h) => h.copyWith(gapCount: h.gapCount + 1));
         }
@@ -661,9 +790,14 @@ class AcquisitionSession {
 
   void _onDecodeResult(DecodeResult result) {
     switch (result) {
-      case DecodeEegOk():
+      case DecodeEegOk(:final sample):
         _eegWindow++;
-        _mutateHealth((h) => h.copyWith(eegPackets: h.eegPackets + 1));
+        _mutateHealth(
+          (h) => h.copyWith(
+            eegPackets: h.eegPackets + 1,
+            batteryPercent: sample.batteryPercent ?? h.batteryPercent,
+          ),
+        );
       case DecodeMotionOk():
         _motionWindow++;
         _mutateHealth((h) => h.copyWith(motionPackets: h.motionPackets + 1));
@@ -709,17 +843,19 @@ class AcquisitionSession {
 
   Future<void> _onLinkLost() async {
     if (_userStopRequested) return;
-    // Only Streaming / Reconnecting may start recovery — never during
-    // Connecting / Preparing (avoids overlapping teardown + reconnect).
     if (!BleFsmPolicy.canHandleLinkLost(_state)) return;
 
     final epoch = _bumpEpoch();
-    final name = _preferredName ?? _device?.platformName ?? 'device';
+    final name = _preferredName ??
+        (_device != null ? _resolvedDeviceName(_device!) : 'device');
     _acceptPackets = false;
     await _orderedTeardown(disconnectBle: false);
     if (!_isEpochCurrent(epoch)) return;
 
-    await _beginReconnectAttempt(name: name, epoch: epoch);
+    await _beginReconnectAttempt(
+      name: name.isEmpty ? 'device' : name,
+      epoch: epoch,
+    );
   }
 
   /// Shared reconnect backoff entry used by link-lost and prepare failures.
@@ -803,6 +939,7 @@ class AcquisitionSession {
       await device.connect(
         timeout: const Duration(seconds: 15),
         license: License.nonprofit,
+        mtu: EmotivBleUuids.preferredRequestMtu,
       );
       if (!_isEpochCurrent(epoch) || _userStopRequested) {
         try {
@@ -819,13 +956,13 @@ class AcquisitionSession {
     } catch (_) {
       if (!_isEpochCurrent(epoch)) return;
       await _beginReconnectAttempt(
-        name: _preferredName ?? device.platformName,
+        name: _preferredName ?? _resolvedDeviceName(device),
         epoch: epoch,
       );
     }
   }
 
-  /// Listened scan for a preferred peripheral; returns the device when found.
+  /// Listened active scan for a preferred peripheral; returns the device when found.
   Future<BluetoothDevice?> _scanForPreferred({
     required String id,
     String? name,
@@ -852,8 +989,9 @@ class AcquisitionSession {
               serviceUuids: r.advertisementData.serviceUuids,
             );
             final matchId = r.device.remoteId.str == id;
+            final resolvedName = _resolvedDeviceName(r.device);
             final matchName =
-                name != null && name.isNotEmpty && r.device.platformName == name;
+                name != null && name.isNotEmpty && resolvedName == name;
             if (matchId || matchName) {
               completeOnce(r.device);
               return;
@@ -863,11 +1001,11 @@ class AcquisitionSession {
       );
 
       await FlutterBluePlus.startScan(
-        withServices: [
-          Guid(EmotivBleUuids.control),
-          Guid(EmotivBleUuids.serviceB),
-        ],
+        withServices: _platformScanServiceFilter(),
         timeout: timeout,
+        continuousUpdates: true,
+        continuousDivisor: 3,
+        androidScanMode: AndroidScanMode.lowLatency,
         androidUsesFineLocation: true,
       );
 
@@ -942,11 +1080,9 @@ class AcquisitionSession {
 
     try {
       final withServices = await FlutterBluePlus.systemDevices([
-        Guid(EmotivBleUuids.control),
-        Guid(EmotivBleUuids.serviceB),
+        Guid(EmotivBleUuids.epocXService),
       ]);
       for (final d in withServices) {
-        // Windows systemDevices ignores withServices; require name/preferred.
         _considerScanResult(d, _rssi[d.remoteId.str] ?? 0);
       }
     } catch (_) {}
@@ -959,9 +1095,11 @@ class AcquisitionSession {
     List<Guid> serviceUuids = const [],
   }) {
     final id = device.remoteId.str;
-    final platformName = device.platformName.trim();
     final resolvedAdv = (advName ?? '').trim();
-    final name = platformName.isNotEmpty ? platformName : resolvedAdv;
+    if (resolvedAdv.isNotEmpty) {
+      _advNames[id] = resolvedAdv;
+    }
+    final name = _resolvedDeviceName(device);
     final isPreferred = id == _preferredId ||
         (_preferredName != null &&
             name.isNotEmpty &&
@@ -986,11 +1124,11 @@ class AcquisitionSession {
 
   List<DiscoveredDevice> _buildDeviceList() {
     final devices = _discovered.entries.map((e) {
-      final name = e.value.platformName;
+      final name = _resolvedDeviceName(e.value);
       final parsed = _identityResolver.tryParseAdvertisement(name);
       return DiscoveredDevice(
         id: e.key,
-        name: name.isEmpty ? '(unnamed Emotiv)' : name,
+        name: name.isEmpty ? '(unnamed EPOC X)' : name,
         rssi: _rssi[e.key],
         serialHex: parsed?.serialHex,
         isPreferred: e.key == _preferredId ||
@@ -1031,7 +1169,6 @@ class AcquisitionSession {
         health: _health,
       ),
     );
-    // Soft connect/prepare failure: drop FGS (fire-and-forget).
     unawaited(StreamingForegroundService.ensureStopped(epoch: _opEpoch));
   }
 
@@ -1051,7 +1188,7 @@ class AcquisitionSession {
       targetId = id;
     } else if (_preferredName != null) {
       for (final e in _discovered.entries) {
-        if (e.value.platformName == _preferredName) {
+        if (_resolvedDeviceName(e.value) == _preferredName) {
           targetId = e.key;
           break;
         }
@@ -1059,8 +1196,6 @@ class AcquisitionSession {
     }
     if (targetId == null) return;
 
-    // Synchronous claim before any await so concurrent scanResults cannot
-    // start a second connect.
     _autoConnectClaimed = true;
     _autoConnectPreferred = false;
     await connect(targetId);
@@ -1072,7 +1207,6 @@ class AcquisitionSession {
     } catch (_) {}
     await _scanActiveSub?.cancel();
     _scanActiveSub = null;
-    // Cancel scan-result listeners only; keep link/notify subs intact.
     await _scanSubs.cancelAll();
   }
 
@@ -1103,14 +1237,10 @@ class AcquisitionSession {
     }
   }
 
-  bool _isDisSerial(String uuid) {
-    final id = uuid.toUpperCase().replaceAll('-', '');
-    return id == '00002A2500001000800000805F9B34FB' || id == '2A25';
-  }
-
   /// Ordered teardown: stop packets → cancel notifies → flush CSV → close LSL → disconnect.
   Future<void> _orderedTeardown({required bool disconnectBle}) async {
-    final name = _preferredName ?? _device?.platformName ?? '';
+    final name = _preferredName ??
+        (_device != null ? _resolvedDeviceName(_device!) : '');
     if (disconnectBle && (_state is AcquisitionStreaming || _device != null)) {
       _emit(AcquisitionStopping(deviceName: name, health: _health));
     }
@@ -1126,7 +1256,6 @@ class AcquisitionSession {
     try {
       await _csv.stop();
     } catch (_) {}
-    // Detach remote finalization so BLE disconnect/reconnect never blocks.
     unawaited(_liveSync.stop(timeout: const Duration(seconds: 60)));
     try {
       await _lsl.stop();
@@ -1141,7 +1270,8 @@ class AcquisitionSession {
     if (disconnectBle) {
       await _forceDisconnect(_device);
       _device = null;
-      _mutateHealth((h) => h.copyWith(clearBatteryPercent: true));
+      _negotiatedMtu = null;
+      _mutateHealth((h) => h.copyWith(clearHardwareTelemetry: true));
     }
   }
 

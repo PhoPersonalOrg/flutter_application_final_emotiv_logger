@@ -35,55 +35,36 @@
       "loadNpmCommands": false,
       "commands": [
         {
-          "name": "$(tools) Build iOS",
+          "name": "$(tools) Build",
           "color": "#ed9600",
-          "tooltip": "flutter build ios --release with Dropbox defines from .env",
-          "useVsCodeApi": false,
-          "singleInstance": true,
-          "terminalName": "Flutter iOS Build",
-          "cwd": "${workspaceFolder}",
-          "command": "fvm flutter build ios --release --dart-define-from-file=.env"
+          "tooltip": "Release build+run on the device selected in the Flutter status bar (.env defines)",
+          "useVsCodeApi": true,
+          "command": "debug.startFromConfig",
+          "args": [
+            {
+              "name": "flutter_application_final_emotiv_logger (release mode)",
+              "request": "launch",
+              "type": "dart",
+              "flutterMode": "release",
+              "toolArgs": [
+                "--dart-define-from-file=.env"
+              ]
+            }
+          ]
         },
         {
-          "name": "$(play) Run Device",
+          "name": "$(play) Run",
           "color": "#4ec9b0",
           "tooltip": "Start Without Debugging on the device selected in the Flutter status bar",
           "useVsCodeApi": true,
           "command": "workbench.action.debug.run"
         },
         {
-          "name": "$(debug-alt) Debug Device",
+          "name": "$(debug-alt) Debug",
           "color": "#569cd6",
           "tooltip": "Start Debugging on the device selected in the Flutter status bar",
           "useVsCodeApi": true,
           "command": "workbench.action.debug.start"
-        },
-        {
-          "name": "$(device-mobile) Select Device",
-          "color": "#c586c0",
-          "tooltip": "Flutter: Select Device (same as status-bar device picker)",
-          "useVsCodeApi": true,
-          "command": "flutter.selectDevice"
-        },
-        {
-          "name": "$(trash) Clean iOS",
-          "color": "#f44747",
-          "tooltip": "flutter clean + remove ios/Pods and Podfile.lock",
-          "useVsCodeApi": false,
-          "singleInstance": true,
-          "terminalName": "Flutter Clean iOS",
-          "cwd": "${workspaceFolder}",
-          "command": "fvm flutter clean && rm -rf ios/Pods ios/Podfile.lock ios/.symlinks build/ios && fvm flutter pub get && (cd ios && pod install)"
-        },
-        {
-          "name": "$(package) Pub Get",
-          "color": "#dcdcaa",
-          "tooltip": "fvm flutter pub get",
-          "useVsCodeApi": false,
-          "singleInstance": true,
-          "terminalName": "Flutter Pub Get",
-          "cwd": "${workspaceFolder}",
-          "command": "fvm flutter pub get"
         }
       ]
     }
@@ -91,7 +72,7 @@
   "extensions": {
     "recommendations": [
       "dart-code.flutter",
-      "seunlanlege.action-buttons"
+      "jkearins.action-buttons-ext"
     ]
   }
 }

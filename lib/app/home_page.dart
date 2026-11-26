@@ -52,7 +52,6 @@ class _HomePageState extends ConsumerState<HomePage>
       Permission.bluetoothConnect,
       Permission.locationWhenInUse,
     ];
-    // Android 13+ needs POST_NOTIFICATIONS for the streaming FGS notification.
     if (Platform.isAndroid) {
       permissions.add(Permission.notification);
     }
@@ -93,7 +92,7 @@ class _HomePageState extends ConsumerState<HomePage>
               buildInfoAsync.when(
                 data: (info) => info.label,
                 loading: () => '',
-                error: (_, __) => '',
+                error: (_, _) => '',
               ),
               textAlign: TextAlign.center,
               style: TextStyle(
@@ -265,6 +264,13 @@ class _HealthCard extends StatelessWidget {
                 _metric('EEG Hz', health.eegHz.toStringAsFixed(0)),
                 _metric('Motion Hz', health.motionHz.toStringAsFixed(0)),
                 _metric('EEG pkts', '${health.eegPackets}'),
+                if (health.headsetFirmwareHex != null)
+                  _metric(
+                    'Firmware',
+                    '${health.headsetFirmwareHex} (V${health.cryptoVersion ?? 2})',
+                  ),
+                if (health.negotiatedMtu != null)
+                  _metric('MTU', '${health.negotiatedMtu}'),
                 _metric('Decode fail', '${health.decodeFailures}'),
                 _metric('Gaps', '${health.gapCount}'),
                 _metric('CSV drop', '${health.csvDropped}'),
@@ -418,9 +424,9 @@ class _SignalPreviewCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cq = snapshot.latestContactQuality;
+    final overallCq = snapshot.latestOverallCq;
     final tier = snapshot.latestTier;
-    final hasCq = snapshot.hasSamples && cq > 0;
+    final hasCq = snapshot.hasSamples && overallCq > 0;
 
     return Card(
       child: Padding(
@@ -437,7 +443,7 @@ class _SignalPreviewCard extends StatelessWidget {
                   ),
                 ),
                 _CqReadoutChip(
-                  cq: cq,
+                  overallCq: overallCq,
                   tier: tier,
                   active: sessionActive && snapshot.hasSamples,
                   hasCq: hasCq,
@@ -471,16 +477,18 @@ class _SignalPreviewCard extends StatelessWidget {
               const SizedBox(height: 8),
               ContactQualityHistoryStrip(
                 cqHistoryTiers: snapshot.cqHistoryTiers,
+                cqHistoryChannelTiers: snapshot.cqHistoryChannelTiers,
                 height: 40,
               ),
               const SizedBox(height: 10),
               ContactQualityHeadMap(
-                contactQuality: cq,
+                channelGrades: snapshot.latestChannelGrades,
+                overallCq: overallCq,
                 height: 128,
               ),
               const SizedBox(height: 4),
               Text(
-                'Mode-7: single headset CQ (all sensors)',
+                'Per-electrode Contact Quality (14 sensors · 2 Hz refresh)',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                       color: Colors.grey.shade600,
                     ),
@@ -495,13 +503,13 @@ class _SignalPreviewCard extends StatelessWidget {
 
 class _CqReadoutChip extends StatelessWidget {
   const _CqReadoutChip({
-    required this.cq,
+    required this.overallCq,
     required this.tier,
     required this.active,
     required this.hasCq,
   });
 
-  final int cq;
+  final int overallCq;
   final ContactQualityTier tier;
   final bool active;
   final bool hasCq;
@@ -511,7 +519,7 @@ class _CqReadoutChip extends StatelessWidget {
     final bg = active ? tier.color : Colors.grey.shade300;
     final fg = active ? tier.labelColor : Colors.black87;
     final text = active
-        ? (hasCq ? 'CQ $cq · ${tier.label}' : 'CQ 0 · ${tier.label}')
+        ? (hasCq ? 'CQ $overallCq · ${tier.label}' : 'CQ 0 · ${tier.label}')
         : 'CQ —';
 
     return Container(
@@ -555,8 +563,8 @@ class _DeviceList extends ConsumerWidget {
           ),
           subtitle: Text(
             scanning.active
-                ? 'Looking for EPOC / Epoc X advertising names'
-                : 'Power the headset, wear it nearby, then scan again',
+                ? 'Active BLE scan for EPOC X (81072f40 / EPOCX name)'
+                : 'Unplug USB receiver/charger, power headset on, then scan again',
           ),
         ),
       );

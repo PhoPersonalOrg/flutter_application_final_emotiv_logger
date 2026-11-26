@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../decode/crypto_codec.dart';
 import 'save_directory_policy.dart';
 
 enum NetworkProtocol { udp, tcp }
@@ -17,12 +18,13 @@ extension NetworkProtocolX on NetworkProtocol {
   }
 }
 
-/// Rewritten settings schema (no backwards compatibility with prior keys).
+/// Persisted application settings.
 class AppSettings {
   const AppSettings({
     this.saveDirectory,
     this.lslEnabled = true,
     this.hostname = defaultHostname,
+    this.headbandPosition = HeadbandPosition.top,
     this.useNetworkStream = false,
     this.networkHost = defaultHost,
     this.networkPort = defaultPort,
@@ -38,6 +40,9 @@ class AppSettings {
 
   /// Label advertised as the LSL outlet hostname (when supported).
   final String hostname;
+
+  /// Physical EPOC X headband mounting orientation (`"top"` default vs `"back"`).
+  final HeadbandPosition headbandPosition;
 
   final bool useNetworkStream;
   final String networkHost;
@@ -64,6 +69,7 @@ class AppSettings {
     bool clearSaveDirectory = false,
     bool? lslEnabled,
     String? hostname,
+    HeadbandPosition? headbandPosition,
     bool? useNetworkStream,
     String? networkHost,
     int? networkPort,
@@ -80,6 +86,7 @@ class AppSettings {
           : (saveDirectory ?? this.saveDirectory),
       lslEnabled: lslEnabled ?? this.lslEnabled,
       hostname: hostname ?? this.hostname,
+      headbandPosition: headbandPosition ?? this.headbandPosition,
       useNetworkStream: useNetworkStream ?? this.useNetworkStream,
       networkHost: networkHost ?? this.networkHost,
       networkPort: networkPort ?? this.networkPort,
@@ -101,6 +108,7 @@ class AppSettingsRepository {
   static const _saveDirectoryKey = '${_prefix}saveDirectory';
   static const _lslEnabledKey = '${_prefix}lslEnabled';
   static const _hostnameKey = '${_prefix}hostname';
+  static const _headbandPositionKey = '${_prefix}headbandPosition';
   static const _useNetworkStreamKey = '${_prefix}useNetworkStream';
   static const _networkHostKey = '${_prefix}networkHost';
   static const _networkPortKey = '${_prefix}networkPort';
@@ -136,6 +144,9 @@ class AppSettingsRepository {
       hostname: (hostnameRaw == null || hostnameRaw.isEmpty)
           ? AppSettings.defaultHostname
           : hostnameRaw,
+      headbandPosition: HeadbandPositionX.fromStorage(
+        prefs.getString(_headbandPositionKey),
+      ),
       useNetworkStream: prefs.getBool(_useNetworkStreamKey) ?? false,
       networkHost: prefs.getString(_networkHostKey) ?? AppSettings.defaultHost,
       networkPort: prefs.getInt(_networkPortKey) ?? AppSettings.defaultPort,
@@ -164,6 +175,10 @@ class AppSettingsRepository {
       settings.hostname.trim().isEmpty
           ? AppSettings.defaultHostname
           : settings.hostname.trim(),
+    );
+    await prefs.setString(
+      _headbandPositionKey,
+      settings.headbandPosition.storageValue,
     );
     await prefs.setBool(_useNetworkStreamKey, settings.useNetworkStream);
     await prefs.setString(_networkHostKey, settings.networkHost);

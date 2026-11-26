@@ -6,22 +6,24 @@ import '../domain/samples.dart';
 import 'contact_quality_tier.dart';
 import 'live_eeg_ring_buffer.dart';
 
-/// Scrolling categorical contact-quality history heatmap modeled after
-/// pyPhoTimeline's `EEGQualityHeatmapDetailRenderer` + `quality_heatmap.py`.
+/// Scrolling 14-electrode categorical contact-quality history heatmap.
 ///
-/// Renders 14 electrode bands separated by thin 1 px gaps over fixed-duration
-/// committed time bins (`LiveEegRingBuffer.cqHistoryTiers`), so committed past
-/// columns translate smoothly and never flicker retroactively.
+/// Renders 14 independent electrode rows (`AF3..AF4`) separated by thin 1 px
+/// gaps over fixed-duration committed time bins (`cqHistoryChannelTiers`),
+/// falling back to 1D summary column tiers (`cqHistoryTiers`) when per-channel
+/// bins are omitted.
 class ContactQualityHistoryStrip extends StatelessWidget {
   const ContactQualityHistoryStrip({
     super.key,
     required this.cqHistoryTiers,
+    this.cqHistoryChannelTiers,
     this.maxBins = LiveEegRingBuffer.defaultCqHistoryBins,
     this.channelCount = EegSample.channelCount,
     this.height = 44,
   });
 
   final Uint8List cqHistoryTiers;
+  final Uint8List? cqHistoryChannelTiers;
   final int maxBins;
   final int channelCount;
   final double height;
@@ -39,6 +41,7 @@ class ContactQualityHistoryStrip extends StatelessWidget {
             child: CustomPaint(
               painter: _ContactQualityHistoryPainter(
                 tiers: cqHistoryTiers,
+                channelTiers: cqHistoryChannelTiers,
                 maxBins: maxBins,
                 channelCount: channelCount,
               ),
@@ -53,11 +56,13 @@ class ContactQualityHistoryStrip extends StatelessWidget {
 class _ContactQualityHistoryPainter extends CustomPainter {
   _ContactQualityHistoryPainter({
     required this.tiers,
+    required this.channelTiers,
     required this.maxBins,
     required this.channelCount,
   });
 
   final Uint8List tiers;
+  final Uint8List? channelTiers;
   final int maxBins;
   final int channelCount;
 
@@ -71,7 +76,6 @@ class _ContactQualityHistoryPainter extends CustomPainter {
       return;
     }
 
-    // Left label ("EEGQ") aligned with EegStackedLanePlot's 34 px channel gutter.
     final tp = TextPainter(
       text: const TextSpan(
         text: 'CQ',
@@ -110,36 +114,54 @@ class _ContactQualityHistoryPainter extends CustomPainter {
     final n = tiers.length;
     if (n == 0) return;
 
-    // Right-align live edge so newest committed bin sits at the right playhead,
-    // scrolling leftward as history fills.
     final visibleCount = n > cols ? cols : n;
     final srcStart = n - visibleCount;
     final startCol = cols - visibleCount;
 
     final cellPaint = Paint()..style = PaintingStyle.fill;
+    final perCh = channelTiers;
+    final hasPerChannel =
+        perCh != null && channelCount > 0 && perCh.length == n * channelCount;
 
-    // Merge contiguous columns of the same tier into a single rect per run for
-    // minimal draw calls, then punch thin horizontal electrode row separators
-    // matching pyPhoTimeline `insert_electrode_row_separators` (8:1 block:gap).
-    var runStart = 0;
-    while (runStart < visibleCount) {
-      final tierVal = tiers[srcStart + runStart];
-      var runEnd = runStart + 1;
-      while (runEnd < visibleCount && tiers[srcStart + runEnd] == tierVal) {
-        runEnd++;
+    if (hasPerChannel) {
+      final rowH = usableHeight / channelCount;
+      for (var ch = 0; ch < channelCount; ch++) {
+        final y0 = _verticalPad + ch * rowH;
+        final y1 = y0 + rowH;
+        var runStart = 0;
+        while (runStart < visibleCount) {
+          final tierVal = perCh[(srcStart + runStart) * channelCount + ch];
+          var runEnd = runStart + 1;
+          while (runEnd < visibleCount &&
+              perCh[(srcStart + runEnd) * channelCount + ch] == tierVal) {
+            runEnd++;
+          }
+          final x0 = plotLeft + (startCol + runStart) * colWidth;
+          final x1 = plotLeft + (startCol + runEnd) * colWidth;
+          cellPaint.color = ContactQualityTier.fromTierIndex(tierVal).color;
+          canvas.drawRect(Rect.fromLTRB(x0, y0, x1, y1), cellPaint);
+          runStart = runEnd;
+        }
       }
-
-      final x0 = plotLeft + (startCol + runStart) * colWidth;
-      final x1 = plotLeft + (startCol + runEnd) * colWidth;
-      cellPaint.color = ContactQualityTier.fromTierIndex(tierVal).color;
-      canvas.drawRect(
-        Rect.fromLTRB(x0, _verticalPad, x1, _verticalPad + usableHeight),
-        cellPaint,
-      );
-      runStart = runEnd;
+    } else {
+      var runStart = 0;
+      while (runStart < visibleCount) {
+        final tierVal = tiers[srcStart + runStart];
+        var runEnd = runStart + 1;
+        while (runEnd < visibleCount && tiers[srcStart + runEnd] == tierVal) {
+          runEnd++;
+        }
+        final x0 = plotLeft + (startCol + runStart) * colWidth;
+        final x1 = plotLeft + (startCol + runEnd) * colWidth;
+        cellPaint.color = ContactQualityTier.fromTierIndex(tierVal).color;
+        canvas.drawRect(
+          Rect.fromLTRB(x0, _verticalPad, x1, _verticalPad + usableHeight),
+          cellPaint,
+        );
+        runStart = runEnd;
+      }
     }
 
-    // Thin dark horizontal separators so the strip reads as 14 electrode rows.
     if (channelCount > 1 && usableHeight >= channelCount * 2.0) {
       final sepPaint = Paint()
         ..color = const Color(0xB314181F)
@@ -157,8 +179,16 @@ class _ContactQualityHistoryPainter extends CustomPainter {
   bool shouldRepaint(covariant _ContactQualityHistoryPainter oldDelegate) {
     if (oldDelegate.maxBins != maxBins ||
         oldDelegate.channelCount != channelCount ||
-        oldDelegate.tiers.length != tiers.length) {
+        oldDelegate.tiers.length != tiers.length ||
+        oldDelegate.channelTiers?.length != channelTiers?.length) {
       return true;
+    }
+    final aCh = oldDelegate.channelTiers;
+    final bCh = channelTiers;
+    if (aCh != null && bCh != null) {
+      for (var i = 0; i < aCh.length; i++) {
+        if (aCh[i] != bCh[i]) return true;
+      }
     }
     for (var i = 0; i < tiers.length; i++) {
       if (oldDelegate.tiers[i] != tiers[i]) return true;

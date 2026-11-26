@@ -22,6 +22,8 @@ class NetworkSink {
   final Future<List<InternetAddress>> Function(String host) _hostLookup;
 
   String? deviceId;
+  double _eegRateHz = EegSample.nominalRateHz;
+  double _motionRateHz = MotionSample.nominalRateHz;
   InternetAddress? _remote;
   RawDatagramSocket? _udp;
   Socket? _tcp;
@@ -39,9 +41,13 @@ class NetworkSink {
   Future<void> configure({
     required AppSettings settings,
     String? deviceId,
+    double eegRateHz = EegSample.nominalRateHz,
+    double motionRateHz = MotionSample.nominalRateHz,
   }) async {
     final gen = ++_configGen;
     this.deviceId = deviceId;
+    _eegRateHz = eegRateHz;
+    _motionRateHz = motionRateHz;
     await _closeCurrent();
     if (_configGen != gen) return;
 
@@ -152,8 +158,12 @@ class NetworkSink {
           values: s.values,
           timestampSeconds: s.wallClock.microsecondsSinceEpoch / 1e6,
           meta: {
-            'sampleRate': EegSample.nominalRateHz,
+            'sampleRate': _eegRateHz,
             'channelCount': s.values.length,
+            'counter': s.counter,
+            'markerHw': s.markerHw,
+            'overallCq': s.overallCq,
+            'cqGrades': s.contactQualityGrades,
           },
         );
       }
@@ -163,8 +173,9 @@ class NetworkSink {
           values: s.values,
           timestampSeconds: s.wallClock.microsecondsSinceEpoch / 1e6,
           meta: {
-            'sampleRate': MotionSample.nominalRateHz,
+            'sampleRate': _motionRateHz,
             'channelCount': s.values.length,
+            'counterMems': s.counterMems,
           },
         );
       }

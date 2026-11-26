@@ -2,11 +2,15 @@ import 'dart:async';
 import 'dart:isolate';
 import 'dart:typed_data';
 
+import '../domain/ble_uuids.dart';
 import '../domain/samples.dart';
 import 'crypto_codec.dart';
 import 'eeg_counter_monitor.dart';
+import 'headset_config.dart';
 
-/// Offloads AES/motion parse so BLE notify never blocks on crypto.
+/// Background isolate worker offloading EPOC X `64B`/`84B` notification
+/// splitting, `V2`/`V4` AES decryption, EEG/CQ/Battery unpacking, and IMU
+/// orientation/scaling so BLE GATT callbacks never block.
 class DecodePipeline {
   DecodePipeline();
 
@@ -40,26 +44,72 @@ class DecodePipeline {
     if (!_ready.isCompleted) _ready.complete();
   }
 
-  /// Forget per-session decode state (EEG counter tracking). Call when a new
-  /// headset session starts; the isolate outlives individual sessions.
-  void resetSession() {
-    _workerPort?.send(const _ResetJob());
+  /// Configure per-session key schedule, sample rate, ADC bit depth, and
+  /// headband IMU orientation, clearing held CQ/battery/counter state.
+  void configureSession({
+    required EpocXSessionKey sessionKey,
+    int eegRateHz = HeadsetConfig.defaultEegRateHz,
+    int eegResolutionBits = CryptoCodec.defaultEegResolutionBits,
+    HeadbandPosition headbandPosition = HeadbandPosition.top,
+  }) {
+    _workerPort?.send(
+      _ConfigureSessionJob(
+        keyBytes: sessionKey.keyBytes,
+        preXorByte: sessionKey.preXorByte,
+        isV4: sessionKey.isV4,
+        firmwareVersion: sessionKey.firmwareVersion,
+        keyMode: sessionKey.keyMode,
+        eegRateHz: eegRateHz,
+        eegResolutionBits: eegResolutionBits,
+        headbandPositionIndex: headbandPosition.index,
+      ),
+    );
   }
 
-  /// Enqueue raw packet for decode (non-blocking after isolate is ready).
+  /// Hot-update headband orientation (`"top"` vs `"back"`) without resetting CQ/counters.
+  void updateHeadbandPosition(HeadbandPosition position) {
+    _workerPort?.send(_UpdateOrientationJob(position.index));
+  }
+
+  /// Reset per-session decode state (EEG/MEMS counter monitors + CQ/battery hold).
+  void resetSession({int? eegRateHz}) {
+    _workerPort?.send(_ResetJob(eegRateHz: eegRateHz));
+  }
+
+  /// Enqueue a raw BLE notification for split/decrypt/decode.
+  ///
+  /// Accepts either [sessionKey] (full `V2`/`V4` metadata) or [keyBytes]
+  /// (`16B` -> `V2`, `32B` -> `V4`).
   void submit(
     RawPacket packet, {
-    required Uint8List keyBytes,
+    EpocXSessionKey? sessionKey,
+    Uint8List? keyBytes,
+    int? eegRateHz,
     int eegResolutionBits = CryptoCodec.defaultEegResolutionBits,
+    HeadbandPosition? headbandPosition,
   }) {
     final port = _workerPort;
     if (port == null) return;
+
+    final resolvedKey = sessionKey ??
+        (keyBytes != null ? EpocXSessionKey.fromRawKeyBytes(keyBytes) : null);
+    if (resolvedKey == null) {
+      throw ArgumentError('Either sessionKey or keyBytes must be provided');
+    }
+
     port.send(
       _DecodeJob(
         kindIndex: packet.kind.index,
         bytes: packet.bytes,
-        keyBytes: keyBytes,
+        characteristicUuid: packet.characteristicUuid,
+        keyBytes: resolvedKey.keyBytes,
+        preXorByte: resolvedKey.preXorByte,
+        isV4: resolvedKey.isV4,
+        firmwareVersion: resolvedKey.firmwareVersion,
+        keyMode: resolvedKey.keyMode,
+        eegRateHz: eegRateHz,
         eegResolutionBits: eegResolutionBits,
+        headbandPositionIndex: headbandPosition?.index,
         receiveMonoUs: packet.receiveMonoUs,
         wallMs: packet.wallClock.millisecondsSinceEpoch,
       ),
@@ -85,24 +135,71 @@ class DecodePipeline {
     final inbox = ReceivePort();
     boot.handshake.send(inbox.sendPort);
     final out = boot.results;
-    final counters = EegCounterMonitor();
-    // Android CQ cache: latch Mode-7 word7 only on gated counters, hold between.
-    var heldContactQuality = 0;
+
+    final eegCounters = EegCounterMonitor(
+      modulus: HeadsetConfig.defaultEegRateHz,
+    );
+    final memsCounters = MemsCounterMonitor();
+    final decoder = EpocXStatefulDecoder();
+
+    bool keysEqual(EpocXSessionKey? a, _DecodeJob job) {
+      if (a == null) return false;
+      if (a.isV4 != job.isV4 ||
+          a.preXorByte != job.preXorByte ||
+          a.firmwareVersion != job.firmwareVersion ||
+          a.keyBytes.length != job.keyBytes.length) {
+        return false;
+      }
+      for (var i = 0; i < a.keyBytes.length; i++) {
+        if (a.keyBytes[i] != job.keyBytes[i]) return false;
+      }
+      return true;
+    }
 
     inbox.listen((message) {
-      if (message is _ResetJob) {
-        counters.reset();
-        heldContactQuality = 0;
+      if (message is _ConfigureSessionJob) {
+        decoder.eegRateHz = message.eegRateHz;
+        decoder.eegResolutionBits = message.eegResolutionBits;
+        decoder.headbandPosition =
+            HeadbandPosition.values[message.headbandPositionIndex];
+        decoder.configureKey(
+          EpocXSessionKey(
+            keyBytes: message.keyBytes,
+            preXorByte: message.preXorByte,
+            isV4: message.isV4,
+            firmwareVersion: message.firmwareVersion,
+            keyMode: message.keyMode,
+          ),
+        );
+        decoder.reset();
+        eegCounters.reset(newModulus: message.eegRateHz);
+        memsCounters.reset();
         return;
       }
+
+      if (message is _UpdateOrientationJob) {
+        decoder.headbandPosition = HeadbandPosition.values[message.index];
+        return;
+      }
+
+      if (message is _ResetJob) {
+        if (message.eegRateHz != null) {
+          decoder.eegRateHz = message.eegRateHz!;
+        }
+        decoder.reset();
+        eegCounters.reset(newModulus: message.eegRateHz ?? decoder.eegRateHz);
+        memsCounters.reset();
+        return;
+      }
+
       if (message is! _DecodeJob) return;
       final kind = PacketKind.values[message.kindIndex];
 
-      void fail(String text) {
+      void fail(String text, {PacketKind? overrideKind}) {
         out.send(
           DecodeFailed(
             DecodeError(
-              kind: kind,
+              kind: overrideKind ?? kind,
               message: text,
               receiveMonoUs: message.receiveMonoUs,
             ),
@@ -111,63 +208,163 @@ class DecodePipeline {
       }
 
       try {
+        if (!keysEqual(decoder.sessionKey, message)) {
+          decoder.configureKey(
+            EpocXSessionKey(
+              keyBytes: message.keyBytes,
+              preXorByte: message.preXorByte,
+              isV4: message.isV4,
+              firmwareVersion: message.firmwareVersion,
+              keyMode: message.keyMode,
+            ),
+          );
+        }
+        if (message.eegRateHz != null &&
+            message.eegRateHz != decoder.eegRateHz) {
+          decoder.eegRateHz = message.eegRateHz!;
+          eegCounters.modulus = message.eegRateHz!;
+        }
+        decoder.eegResolutionBits = message.eegResolutionBits;
+        if (message.headbandPositionIndex != null) {
+          decoder.headbandPosition =
+              HeadbandPosition.values[message.headbandPositionIndex!];
+        }
+
         final wall = DateTime.fromMillisecondsSinceEpoch(message.wallMs);
+        final bytes = message.bytes;
+
+        void emitDecoded32ByteBlock(Uint8List cipher32) {
+          final plain32 = decoder.decryptPacket(cipher32, isMems: false);
+          final frame = decoder.decodeEegPlaintext(plain32);
+
+          // Defect #1 fix: 32-byte packets with pktType == 0x20 carry a 20-byte
+          // Motion frame in plain32[0..20] (with 12 zero-padding bytes).
+          if (frame.isMotionType) {
+            final mot = decoder.decodeMotionPlaintext(
+              Uint8List.sublistView(plain32, 0, 20),
+            );
+            memsCounters.add(mot.counterMems);
+            out.send(
+              DecodeMotionOk(
+                MotionSample(
+                  values: mot.values,
+                  counterMems: mot.counterMems,
+                  receiveMonoUs: message.receiveMonoUs,
+                  wallClock: wall,
+                ),
+              ),
+            );
+            return;
+          }
+
+          final warning = eegCounters.add(frame.counter);
+          if (warning != null) {
+            fail(warning, overrideKind: PacketKind.eeg);
+          }
+          out.send(
+            DecodeEegOk(
+              EegSample(
+                values: frame.values,
+                counter: frame.counter,
+                markerHw: frame.markerHw,
+                contactQualityGrades: frame.cqGrades,
+                overallCq: frame.overallCq,
+                batteryPercent: frame.batteryPercent,
+                receiveMonoUs: message.receiveMonoUs,
+                wallClock: wall,
+              ),
+            ),
+          );
+        }
+
+        void emitDecoded20ByteBleMotion(Uint8List wire20) {
+          final plain20 = decoder.decryptPacket(wire20, isMems: true);
+          final mot = decoder.decodeMotionPlaintext(plain20);
+          memsCounters.add(mot.counterMems);
+          out.send(
+            DecodeMotionOk(
+              MotionSample(
+                values: mot.values,
+                counterMems: mot.counterMems,
+                receiveMonoUs: message.receiveMonoUs,
+                wallClock: wall,
+              ),
+            ),
+          );
+        }
+
         switch (kind) {
           case PacketKind.eeg:
-            // A notification may carry several 32-byte packages.
-            final frames = CryptoCodec.decryptEegFrames(
-              message.keyBytes,
-              message.bytes,
-              resolutionBits: message.eegResolutionBits,
-            );
-            for (final frame in frames) {
-              final warning = counters.add(frame.counter);
-              if (warning != null) fail(warning);
-              if (frame.isMotionType) {
-                fail(
-                  'Skipped a motion-type (0x20) package received on the EEG '
-                  'characteristic',
-                );
-                continue;
+            final strictBle81072f41 = message.characteristicUuid != null &&
+                EmotivBleUuids.isDataStream(message.characteristicUuid!) &&
+                message.firmwareVersion >
+                    HeadsetConfig.legacyBleSplitMaxFirmware;
+
+            if (strictBle81072f41) {
+              // Exact CortexService onEegDataReceived (0x1408f6420):
+              // 64B -> 2x32B EEG; 84B (0x54) -> 2x32B EEG + 20B MEMS; else discard.
+              final split = CryptoCodec.splitBle81072f41Notification(
+                bytes,
+                firmwareVersion: message.firmwareVersion,
+              );
+              if (split.isEmpty) {
+                return;
               }
-              final gated = frame.contactQuality;
-              if (gated != null) {
-                heldContactQuality = gated;
+              for (final blk in split.eegCipherBlocks) {
+                emitDecoded32ByteBlock(blk);
               }
-              out.send(
-                DecodeEegOk(
-                  EegSample(
-                    values: frame.values,
-                    receiveMonoUs: message.receiveMonoUs,
-                    wallClock: wall,
-                    contactQuality: heldContactQuality,
-                  ),
+              if (split.motionWirePacket != null) {
+                emitDecoded20ByteBleMotion(split.motionWirePacket!);
+              }
+              return;
+            }
+
+            // Direct / replay / legacy fw <= 0x0710 path:
+            // Support 84B combined super-frames, or 1..N x 32B blocks.
+            if (bytes.length == EmotivBleUuids.bleSuperFrameBytes) {
+              final split = CryptoCodec.splitBle81072f41Notification(
+                bytes,
+                firmwareVersion: HeadsetConfig.defaultFirmwareVersion,
+              );
+              for (final blk in split.eegCipherBlocks) {
+                emitDecoded32ByteBlock(blk);
+              }
+              if (split.motionWirePacket != null) {
+                emitDecoded20ByteBleMotion(split.motionWirePacket!);
+              }
+              return;
+            }
+
+            if (bytes.length < CryptoCodec.eegPacketBytes) {
+              throw ArgumentError(
+                'EEG packet must be at least 32 bytes, got ${bytes.length}',
+              );
+            }
+            final count = bytes.length ~/ CryptoCodec.eegPacketBytes;
+            for (var i = 0; i < count; i++) {
+              emitDecoded32ByteBlock(
+                Uint8List.sublistView(
+                  bytes,
+                  i * CryptoCodec.eegPacketBytes,
+                  (i + 1) * CryptoCodec.eegPacketBytes,
                 ),
               );
             }
+
           case PacketKind.motion:
-            // A notification may carry several 20-byte packages.
-            final bytes = message.bytes;
             if (bytes.length < CryptoCodec.motionPacketBytes) {
-              throw ArgumentError('Motion packet must be at least 20 bytes');
+              throw ArgumentError(
+                'Motion packet must be at least 20 bytes, got ${bytes.length}',
+              );
             }
             for (var offset = 0;
                 offset + CryptoCodec.motionPacketBytes <= bytes.length;
                 offset += CryptoCodec.motionPacketBytes) {
-              final values = CryptoCodec.decodeMotion(
+              emitDecoded20ByteBleMotion(
                 Uint8List.sublistView(
                   bytes,
                   offset,
                   offset + CryptoCodec.motionPacketBytes,
-                ),
-              );
-              out.send(
-                DecodeMotionOk(
-                  MotionSample(
-                    values: values,
-                    receiveMonoUs: message.receiveMonoUs,
-                    wallClock: wall,
-                  ),
                 ),
               );
             }
@@ -185,24 +382,66 @@ class _Bootstrap {
   final SendPort results;
 }
 
+class _ConfigureSessionJob {
+  const _ConfigureSessionJob({
+    required this.keyBytes,
+    required this.preXorByte,
+    required this.isV4,
+    required this.firmwareVersion,
+    required this.keyMode,
+    required this.eegRateHz,
+    required this.eegResolutionBits,
+    required this.headbandPositionIndex,
+  });
+
+  final Uint8List keyBytes;
+  final int preXorByte;
+  final bool isV4;
+  final int firmwareVersion;
+  final int keyMode;
+  final int eegRateHz;
+  final int eegResolutionBits;
+  final int headbandPositionIndex;
+}
+
+class _UpdateOrientationJob {
+  const _UpdateOrientationJob(this.index);
+  final int index;
+}
+
 class _ResetJob {
-  const _ResetJob();
+  const _ResetJob({this.eegRateHz});
+  final int? eegRateHz;
 }
 
 class _DecodeJob {
   _DecodeJob({
     required this.kindIndex,
     required this.bytes,
+    required this.characteristicUuid,
     required this.keyBytes,
+    required this.preXorByte,
+    required this.isV4,
+    required this.firmwareVersion,
+    required this.keyMode,
+    required this.eegRateHz,
     required this.eegResolutionBits,
+    required this.headbandPositionIndex,
     required this.receiveMonoUs,
     required this.wallMs,
   });
 
   final int kindIndex;
   final Uint8List bytes;
+  final String? characteristicUuid;
   final Uint8List keyBytes;
+  final int preXorByte;
+  final bool isV4;
+  final int firmwareVersion;
+  final int keyMode;
+  final int? eegRateHz;
   final int eegResolutionBits;
+  final int? headbandPositionIndex;
   final int receiveMonoUs;
   final int wallMs;
 }

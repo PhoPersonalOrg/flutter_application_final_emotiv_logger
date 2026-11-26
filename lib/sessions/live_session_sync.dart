@@ -16,7 +16,7 @@ import 'smb_paths.dart';
 typedef LiveSyncStatusCallback = void Function(String? message);
 
 /// Growing session files that live sync pushes.
-const liveSyncGrowingFiles = ['eeg.csv', 'motion.csv', 'raw.csv'];
+const liveSyncGrowingFiles = ['eeg.csv', 'motion.csv', 'cq.csv', 'raw.csv'];
 const liveSyncMetaFile = 'session.json';
 
 /// Reads `[offset, length)` from [file] (read-only); empty when nothing new.

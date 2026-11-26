@@ -1,4 +1,4 @@
-/// Live acquisition / sink health counters for UI and diagnostics.
+/// Live acquisition / sink health counters and hardware telemetry for UI and diagnostics.
 class AcquisitionHealth {
   const AcquisitionHealth({
     this.eegPackets = 0,
@@ -24,6 +24,11 @@ class AcquisitionHealth {
     this.dropboxMessage,
     this.syncMessage,
     this.batteryPercent,
+    this.headsetFirmwareHex,
+    this.cryptoVersion,
+    this.negotiatedMtu,
+    this.configuredEegRateHz,
+    this.configuredMotionRateHz,
   });
 
   final int eegPackets;
@@ -55,8 +60,24 @@ class AcquisitionHealth {
   /// Live Dropbox/SMB sync status while recording or after finalize.
   final String? syncMessage;
 
-  /// Headset battery from BLE Battery Level (`0x2A19`), 0–100. Null if unknown.
+  /// Headset battery percentage (`0..100`) from in-band EEG (`counter == Fs-1`)
+  /// or BLE Battery Level (`0x2A19`). Null if unknown.
   final int? batteryPercent;
+
+  /// Active headset firmware read from DIS `0x2A26` (e.g. `"0x0720"`).
+  final String? headsetFirmwareHex;
+
+  /// Active hardware encryption version (`2` for `<= 0x073E`, `4` for `>= 0x073F`).
+  final int? cryptoVersion;
+
+  /// Negotiated BLE ATT MTU when reported by the OS stack (`>= 87` required).
+  final int? negotiatedMtu;
+
+  /// Active EEG sample rate from `81072f44` (`128` or `256` Hz).
+  final int? configuredEegRateHz;
+
+  /// Active Motion/MEMS sample rate from `81072f44` (`0`, `32`, `64`, or `128` Hz).
+  final int? configuredMotionRateHz;
 
   bool get isLslHealthy => lslStatus == LslSubsystemStatus.active;
 
@@ -88,6 +109,12 @@ class AcquisitionHealth {
     bool clearSyncMessage = false,
     int? batteryPercent,
     bool clearBatteryPercent = false,
+    String? headsetFirmwareHex,
+    int? cryptoVersion,
+    int? negotiatedMtu,
+    int? configuredEegRateHz,
+    int? configuredMotionRateHz,
+    bool clearHardwareTelemetry = false,
   }) {
     return AcquisitionHealth(
       eegPackets: eegPackets ?? this.eegPackets,
@@ -118,9 +145,24 @@ class AcquisitionHealth {
       syncMessage: clearSyncMessage
           ? null
           : (syncMessage ?? this.syncMessage),
-      batteryPercent: clearBatteryPercent
+      batteryPercent: (clearBatteryPercent || clearHardwareTelemetry)
           ? null
           : (batteryPercent ?? this.batteryPercent),
+      headsetFirmwareHex: clearHardwareTelemetry
+          ? null
+          : (headsetFirmwareHex ?? this.headsetFirmwareHex),
+      cryptoVersion: clearHardwareTelemetry
+          ? null
+          : (cryptoVersion ?? this.cryptoVersion),
+      negotiatedMtu: clearHardwareTelemetry
+          ? null
+          : (negotiatedMtu ?? this.negotiatedMtu),
+      configuredEegRateHz: clearHardwareTelemetry
+          ? null
+          : (configuredEegRateHz ?? this.configuredEegRateHz),
+      configuredMotionRateHz: clearHardwareTelemetry
+          ? null
+          : (configuredMotionRateHz ?? this.configuredMotionRateHz),
     );
   }
 }

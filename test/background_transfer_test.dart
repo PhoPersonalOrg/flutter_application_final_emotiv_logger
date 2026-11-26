@@ -30,6 +30,11 @@ class _FakeBatchAdapter implements BatchRemoteAdapter {
   }
 
   @override
+  Future<Map<String, int>> remoteFileSizes(String folderName) async {
+    return const <String, int>{};
+  }
+
+  @override
   Future<void> uploadFile({
     required File localFile,
     required String folderName,

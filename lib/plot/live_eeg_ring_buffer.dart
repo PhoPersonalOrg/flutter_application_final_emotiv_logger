@@ -10,8 +10,10 @@ class LiveEegPlotSnapshot {
     required this.channelCount,
     required this.sampleCount,
     required this.downsampledChannels,
-    required this.latestContactQuality,
+    required this.latestOverallCq,
+    required this.latestChannelGrades,
     required this.cqHistoryTiers,
+    required this.cqHistoryChannelTiers,
     this.lastWallClock,
   });
 
@@ -20,8 +22,10 @@ class LiveEegPlotSnapshot {
     channelCount: EegSample.channelCount,
     sampleCount: 0,
     downsampledChannels: const [],
-    latestContactQuality: 0,
+    latestOverallCq: 0,
+    latestChannelGrades: Uint8List(EegSample.channelCount),
     cqHistoryTiers: Uint8List(0),
+    cqHistoryChannelTiers: Uint8List(0),
     lastWallClock: null,
   );
 
@@ -36,23 +40,28 @@ class LiveEegPlotSnapshot {
   /// each normalized/drawn independently by `EegStackedLanePlot`.
   final List<Float64List> downsampledChannels;
 
-  /// Latest Mode-7 broadcast contact quality (`0..127`), or `0` if none yet.
-  final int latestContactQuality;
+  /// Latest overall Contact Quality percentage (`0..100`).
+  final int latestOverallCq;
 
-  /// Immutable committed CQ tier indices (`0..4`), oldest -> newest, on a fixed
-  /// time-bin cadence so past cells never mutate in place.
+  /// Latest per-channel discrete Cortex CQ grades (`0, 1, 2, 4`) in `AF3..AF4` order.
+  final Uint8List latestChannelGrades;
+
+  /// Immutable committed summary CQ tier indices (`0..4`), oldest -> newest.
   final Uint8List cqHistoryTiers;
+
+  /// Immutable committed per-electrode CQ tier indices (`0..4`), oldest -> newest,
+  /// stored as `bin * channelCount + ch` (`bins == cqHistoryTiers.length`).
+  final Uint8List cqHistoryChannelTiers;
 
   final DateTime? lastWallClock;
 
   ContactQualityTier get latestTier =>
-      ContactQualityTier.fromMode7Raw(latestContactQuality);
+      ContactQualityTier.fromOverallPercent(latestOverallCq);
 
   bool get hasSamples => sampleCount > 0 && downsampledChannels.isNotEmpty;
 }
 
-/// Preallocated circular EEG buffer + fixed-cadence immutable CQ history,
-/// modeled after pyPhoTimeline's `_LiveRingBuffer` + `TimeSeriesDownsampler`.
+/// Preallocated circular EEG buffer + fixed-cadence immutable per-electrode CQ history.
 class LiveEegRingBuffer {
   LiveEegRingBuffer({
     this.channelCount = EegSample.channelCount,
@@ -66,7 +75,10 @@ class LiveEegRingBuffer {
         assert(cqBinDurationUs > 0),
         assert(cqHistoryBins > 0),
         _data = Float64List(channelCount * windowSamples),
+        _latestChannelGrades = Uint8List(channelCount),
         _cqRing = Uint8List(cqHistoryBins),
+        _cqChannelRing = Uint8List(cqHistoryBins * channelCount),
+        _pendingChannelTiers = Uint8List(channelCount),
         _scratch = Float64List(windowSamples);
 
   /// ~3 s @ 128 Hz.
@@ -93,12 +105,15 @@ class LiveEegRingBuffer {
 
   int _writeIndex = 0;
   int _length = 0;
-  int _latestCq = 0;
+  int _latestOverallCq = 0;
+  final Uint8List _latestChannelGrades;
   DateTime? _lastWallClock;
   int _revision = 0;
 
   // Fixed-grid CQ history state (prevents retroactive cell flicker).
   final Uint8List _cqRing;
+  final Uint8List _cqChannelRing;
+  final Uint8List _pendingChannelTiers;
   int _cqWrite = 0;
   int _cqLength = 0;
   int? _currentBinIndex;
@@ -106,16 +121,20 @@ class LiveEegRingBuffer {
 
   int get length => _length;
   int get writeIndex => _writeIndex;
-  int get latestContactQuality => _latestCq;
+  int get latestOverallCq => _latestOverallCq;
+  Uint8List get latestChannelGrades => Uint8List.fromList(_latestChannelGrades);
   DateTime? get lastWallClock => _lastWallClock;
   int get cqHistoryLength => _cqLength;
 
   void clear() {
     _data.fillRange(0, _data.length, 0.0);
+    _latestChannelGrades.fillRange(0, _latestChannelGrades.length, 0);
     _cqRing.fillRange(0, _cqRing.length, 0);
+    _cqChannelRing.fillRange(0, _cqChannelRing.length, 0);
+    _pendingChannelTiers.fillRange(0, _pendingChannelTiers.length, 0);
     _writeIndex = 0;
     _length = 0;
-    _latestCq = 0;
+    _latestOverallCq = 0;
     _lastWallClock = null;
     _cqWrite = 0;
     _cqLength = 0;
@@ -146,49 +165,76 @@ class LiveEegRingBuffer {
       _length++;
     }
 
-    _latestCq = sample.contactQuality;
+    final grades = sample.contactQualityGrades;
+    var gradeSum = 0;
+    for (var c = 0; c < channelCount; c++) {
+      final g = c < grades.length ? grades[c].clamp(0, 4) : 0;
+      _latestChannelGrades[c] = g;
+      gradeSum += g;
+    }
+    final computedOverall =
+        ((gradeSum * 100.0) / (channelCount * 4.0)).round().clamp(0, 100);
+    _latestOverallCq =
+        sample.overallCq > 0 ? sample.overallCq : computedOverall;
     _lastWallClock = sample.wallClock;
-    _ingestCqSample(sample.receiveMonoUs, sample.contactQuality);
+    _ingestCqSample(sample.receiveMonoUs, _latestOverallCq, _latestChannelGrades);
     _revision++;
   }
 
-  void _ingestCqSample(int monoUs, int cq) {
-    final tier = ContactQualityTier.fromMode7Raw(cq).index_;
+  void _ingestCqSample(
+    int monoUs,
+    int overallCq,
+    Uint8List channelGrades,
+  ) {
+    final summaryTier = ContactQualityTier.fromOverallPercent(overallCq).index_;
     final binIdx = monoUs ~/ cqBinDurationUs;
+
+    void updatePendingChannels() {
+      for (var c = 0; c < channelCount; c++) {
+        _pendingChannelTiers[c] =
+            ContactQualityTier.fromCortexGrade(channelGrades[c]).index_;
+      }
+    }
 
     final cur = _currentBinIndex;
     if (cur == null) {
       _currentBinIndex = binIdx;
-      _pendingBinTier = tier;
+      _pendingBinTier = summaryTier;
+      updatePendingChannels();
       return;
     }
 
     if (binIdx <= cur) {
-      // Same time bin (or out-of-order arrival): update only the live uncommitted bin.
-      _pendingBinTier = tier;
+      _pendingBinTier = summaryTier;
+      updatePendingChannels();
       return;
     }
 
     // Commit the completed bin immutably.
-    _commitCqTier(_pendingBinTier);
+    _commitCqBin(_pendingBinTier, _pendingChannelTiers);
 
-    // Forward-fill any skipped bins (capped to ring size) with the last known tier,
-    // matching pyPhoTimeline `forward_fill_quality_to_time_grid`.
+    // Forward-fill any skipped bins (capped to ring size) with the last known tiers.
     final gap = binIdx - cur - 1;
     if (gap > 0) {
       final fillCount = gap > cqHistoryBins ? cqHistoryBins : gap;
       for (var i = 0; i < fillCount; i++) {
-        _commitCqTier(_pendingBinTier);
+        _commitCqBin(_pendingBinTier, _pendingChannelTiers);
       }
     }
 
     _currentBinIndex = binIdx;
-    _pendingBinTier = tier;
+    _pendingBinTier = summaryTier;
+    updatePendingChannels();
   }
 
-  void _commitCqTier(int tier) {
-    _cqRing[_cqWrite] = tier;
-    _cqWrite = (_cqWrite + 1) % cqHistoryBins;
+  void _commitCqBin(int summaryTier, Uint8List channelTiers) {
+    final dstSlot = _cqWrite;
+    _cqRing[dstSlot] = summaryTier;
+    final base = dstSlot * channelCount;
+    for (var c = 0; c < channelCount; c++) {
+      _cqChannelRing[base + c] = channelTiers[c];
+    }
+    _cqWrite = (dstSlot + 1) % cqHistoryBins;
     if (_cqLength < cqHistoryBins) {
       _cqLength++;
     }
@@ -223,14 +269,17 @@ class LiveEegRingBuffer {
   /// Build an immutable snapshot for UI painting, downsampling each channel
   /// with LTTB to at most [maxPoints] (defaults to [targetDrawPoints]).
   LiveEegPlotSnapshot snapshot({int? maxPoints}) {
+    final (summaryHist, channelHist) = _buildCqHistorySnapshots();
     if (_length == 0) {
       return LiveEegPlotSnapshot(
         revision: _revision,
         channelCount: channelCount,
         sampleCount: 0,
         downsampledChannels: const [],
-        latestContactQuality: _latestCq,
-        cqHistoryTiers: _buildCqHistorySnapshot(),
+        latestOverallCq: _latestOverallCq,
+        latestChannelGrades: Uint8List.fromList(_latestChannelGrades),
+        cqHistoryTiers: summaryHist,
+        cqHistoryChannelTiers: channelHist,
         lastWallClock: _lastWallClock,
       );
     }
@@ -246,38 +295,51 @@ class LiveEegRingBuffer {
       channelCount: channelCount,
       sampleCount: _length,
       downsampledChannels: channels,
-      latestContactQuality: _latestCq,
-      cqHistoryTiers: _buildCqHistorySnapshot(),
+      latestOverallCq: _latestOverallCq,
+      latestChannelGrades: Uint8List.fromList(_latestChannelGrades),
+      cqHistoryTiers: summaryHist,
+      cqHistoryChannelTiers: channelHist,
       lastWallClock: _lastWallClock,
     );
   }
 
-  Uint8List _buildCqHistorySnapshot() {
+  (Uint8List, Uint8List) _buildCqHistorySnapshots() {
     final includePending = _currentBinIndex != null ? 1 : 0;
     final committedCount = _cqLength;
     final total = committedCount + includePending;
-    if (total == 0) return Uint8List(0);
+    if (total == 0) return (Uint8List(0), Uint8List(0));
 
-    final cappedCommitted = committedCount >= cqHistoryBins && includePending == 1
-        ? cqHistoryBins - 1
-        : committedCount;
+    final cappedCommitted =
+        committedCount >= cqHistoryBins && includePending == 1
+            ? cqHistoryBins - 1
+            : committedCount;
     final outLen = cappedCommitted + includePending;
-    final out = Uint8List(outLen);
+    final outSummary = Uint8List(outLen);
+    final outChannels = Uint8List(outLen * channelCount);
 
     final startLogical = committedCount - cappedCommitted;
     final ringOldest = _cqLength < cqHistoryBins ? 0 : _cqWrite;
     for (var i = 0; i < cappedCommitted; i++) {
       final idx = (ringOldest + startLogical + i) % cqHistoryBins;
-      out[i] = _cqRing[idx];
+      outSummary[i] = _cqRing[idx];
+      final srcBase = idx * channelCount;
+      final dstBase = i * channelCount;
+      for (var c = 0; c < channelCount; c++) {
+        outChannels[dstBase + c] = _cqChannelRing[srcBase + c];
+      }
     }
     if (includePending == 1) {
-      out[outLen - 1] = _pendingBinTier;
+      final lastIdx = outLen - 1;
+      outSummary[lastIdx] = _pendingBinTier;
+      final dstBase = lastIdx * channelCount;
+      for (var c = 0; c < channelCount; c++) {
+        outChannels[dstBase + c] = _pendingChannelTiers[c];
+      }
     }
-    return out;
+    return (outSummary, outChannels);
   }
 
-  /// Largest-Triangle-Three-Buckets (LTTB) downsampler for uniform-x series
-  /// (`series[0..length)`), ported from pyPhoTimeline `TimeSeriesDownsampler.lttb_downsample`.
+  /// Largest-Triangle-Three-Buckets (LTTB) downsampler for uniform-x series.
   static Float64List lttbDownsampleUniform(
     Float64List series,
     int length,

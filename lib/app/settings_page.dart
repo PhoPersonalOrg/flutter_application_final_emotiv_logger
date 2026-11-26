@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../decode/crypto_codec.dart';
 import '../directory_helper.dart';
 import '../sessions/dropbox_config.dart';
 import 'providers.dart';
@@ -179,6 +180,24 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               style: const TextStyle(fontSize: 12, color: Colors.black54),
             ),
           ),
+          DropdownButtonFormField<HeadbandPosition>(
+            initialValue: _draft.headbandPosition,
+            decoration: const InputDecoration(
+              labelText: 'Headband orientation (IMU)',
+              helperText:
+                  'Rotating EPOC X headband position for Q/Acc/Mag axis alignment',
+            ),
+            items: [
+              for (final pos in HeadbandPosition.values)
+                DropdownMenuItem(value: pos, child: Text(pos.displayLabel)),
+            ],
+            onChanged: (pos) {
+              if (pos != null) {
+                setState(() => _draft = _draft.copyWith(headbandPosition: pos));
+              }
+            },
+          ),
+          const SizedBox(height: 8),
           SwitchListTile(
             title: const Text('LSL outlet'),
             subtitle: const Text('First-class sink; degrades if native lib fails'),

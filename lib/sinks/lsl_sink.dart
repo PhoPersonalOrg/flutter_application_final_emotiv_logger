@@ -15,8 +15,10 @@ String resolveLslHostname(String? raw) {
   return trimmed.isEmpty ? AppSettings.defaultHostname : trimmed;
 }
 
-/// In-process LSL outlets backed by vendored `liblsl`.
-/// Creation failure -> [LslSubsystemStatus.degraded], session continues.
+/// In-process LSL outlets backed by vendored `liblsl`:
+/// - `Epoc X` (`EEG`, 14 channels in `uV`)
+/// - `Epoc X eQuality` (`Raw`, 14 per-electrode Cortex CQ grades `qAF3..qAF4`)
+/// - `Epoc X Motion` (`Accelerometer`, 10 IMU channels `Q0..MagZ`)
 class LslSink {
   LslSink({
     required this.hub,
@@ -49,6 +51,8 @@ class LslSink {
     required bool enabled,
     required String sourceId,
     String hostname = AppSettings.defaultHostname,
+    double eegRateHz = EegSample.nominalRateHz,
+    double motionRateHz = MotionSample.nominalRateHz,
   }) async {
     await stop();
     if (!enabled) {
@@ -70,7 +74,7 @@ class LslSink {
         streamName: 'Epoc X',
         streamType: LSLContentType.eeg,
         channelCount: EegSample.channelCount,
-        sampleRate: EegSample.nominalRateHz,
+        sampleRate: eegRateHz,
         channelFormat: LSLChannelFormat.float32,
         sourceId: sourceId,
         hostname: effectiveHostname,
@@ -94,7 +98,7 @@ class LslSink {
           streamName: EegSample.qualityStreamName,
           streamType: LSLContentType.custom(EegSample.qualityStreamType),
           channelCount: EegSample.channelCount,
-          sampleRate: EegSample.nominalRateHz,
+          sampleRate: eegRateHz,
           channelFormat: LSLChannelFormat.float32,
           sourceId: sourceId,
           hostname: effectiveHostname,
@@ -123,38 +127,40 @@ class LslSink {
         _qualityInfo = null;
       }
 
-      try {
-        _motionInfo = await LSL.createStreamInfo(
-          streamName: 'Epoc X Motion',
-          streamType: LSLContentType.custom('Accelerometer'),
-          channelCount: MotionSample.channelCount,
-          sampleRate: MotionSample.nominalRateHz,
-          channelFormat: LSLChannelFormat.float32,
-          sourceId: sourceId,
-          hostname: effectiveHostname,
-        );
-        _addChannelMetadata(
-          _motionInfo!,
-          labels: MotionSample.channelNames,
-          unit: 'raw',
-          channelType: 'Accelerometer',
-        );
-        _motionOutlet = await LSL
-            .createOutlet(
-              streamInfo: _motionInfo!,
-              chunkSize: 0,
-              maxBuffer: 360,
-            )
-            .timeout(const Duration(seconds: 5));
-      } catch (_) {
+      if (motionRateHz > 0) {
         try {
-          await _motionOutlet?.destroy();
-        } catch (_) {}
-        try {
-          _motionInfo?.destroy();
-        } catch (_) {}
-        _motionOutlet = null;
-        _motionInfo = null;
+          _motionInfo = await LSL.createStreamInfo(
+            streamName: 'Epoc X Motion',
+            streamType: LSLContentType.custom('Accelerometer'),
+            channelCount: MotionSample.channelCount,
+            sampleRate: motionRateHz,
+            channelFormat: LSLChannelFormat.float32,
+            sourceId: sourceId,
+            hostname: effectiveHostname,
+          );
+          _addChannelMetadata(
+            _motionInfo!,
+            labels: MotionSample.channelNames,
+            unit: 'raw',
+            channelType: 'Accelerometer',
+          );
+          _motionOutlet = await LSL
+              .createOutlet(
+                streamInfo: _motionInfo!,
+                chunkSize: 0,
+                maxBuffer: 360,
+              )
+              .timeout(const Duration(seconds: 5));
+        } catch (_) {
+          try {
+            await _motionOutlet?.destroy();
+          } catch (_) {}
+          try {
+            _motionInfo?.destroy();
+          } catch (_) {}
+          _motionOutlet = null;
+          _motionInfo = null;
+        }
       }
 
       _active = true;
@@ -163,7 +169,8 @@ class LslSink {
       onHealth(
         (h) => h.copyWith(
           lslStatus: LslSubsystemStatus.active,
-          lslMessage: 'LSL active ($effectiveHostname) on $platform',
+          lslMessage:
+              'LSL active ($effectiveHostname, ${eegRateHz.toStringAsFixed(0)}/${motionRateHz.toStringAsFixed(0)} Hz) on $platform',
         ),
       );
       return LslSubsystemStatus.active;
@@ -225,7 +232,7 @@ class LslSink {
         }
         if (eegPushed && _qualityOutlet != null && _active) {
           try {
-            await _qualityOutlet!.pushSample(s.qualityBroadcastValues());
+            await _qualityOutlet!.pushSample(s.qualityValues());
             _qualityOk++;
           } catch (_) {
             _qualityFail++;
@@ -243,6 +250,9 @@ class LslSink {
             _motionFail++;
           }
         }
+      } else {
+        // Drain unused motion samples if MEMS rate is 0 so LSL queue never fills.
+        hub.takeLslMotion();
       }
     } while (_drainPending && _active);
   }

@@ -14,24 +14,14 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('ContactQualityTier', () {
-    test('maps Mode-7 raw 0..127 bands to pyPhoTimeline tiers and hex colors', () {
-      expect(ContactQualityTier.fromMode7Raw(null), ContactQualityTier.unknown);
-      expect(ContactQualityTier.fromMode7Raw(-1), ContactQualityTier.unknown);
-      expect(ContactQualityTier.fromMode7Raw(0), ContactQualityTier.unknown);
+    test('maps discrete Cortex CQ grades {0, 1, 2, 3, 4} and palette colors', () {
+      expect(ContactQualityTier.fromCortexGrade(null), ContactQualityTier.unknown);
+      expect(ContactQualityTier.fromCortexGrade(0), ContactQualityTier.unknown);
+      expect(ContactQualityTier.fromCortexGrade(1), ContactQualityTier.poor);
+      expect(ContactQualityTier.fromCortexGrade(2), ContactQualityTier.fair);
+      expect(ContactQualityTier.fromCortexGrade(3), ContactQualityTier.good);
+      expect(ContactQualityTier.fromCortexGrade(4), ContactQualityTier.excellent);
 
-      expect(ContactQualityTier.fromMode7Raw(1), ContactQualityTier.poor);
-      expect(ContactQualityTier.fromMode7Raw(31), ContactQualityTier.poor);
-
-      expect(ContactQualityTier.fromMode7Raw(32), ContactQualityTier.fair);
-      expect(ContactQualityTier.fromMode7Raw(63), ContactQualityTier.fair);
-
-      expect(ContactQualityTier.fromMode7Raw(64), ContactQualityTier.good);
-      expect(ContactQualityTier.fromMode7Raw(95), ContactQualityTier.good);
-
-      expect(ContactQualityTier.fromMode7Raw(96), ContactQualityTier.excellent);
-      expect(ContactQualityTier.fromMode7Raw(127), ContactQualityTier.excellent);
-
-      // Exact pyPhoTimeline hex palette.
       expect(ContactQualityTier.unknown.color, const Color(0xFF808080));
       expect(ContactQualityTier.poor.color, const Color(0xFFD32F2F));
       expect(ContactQualityTier.fair.color, const Color(0xFFF57C00));
@@ -55,7 +45,7 @@ void main() {
   });
 
   group('LiveEegRingBuffer', () {
-    test('pushes and wraps chronological samples per channel', () {
+    test('pushes and wraps chronological samples and per-electrode CQ grades', () {
       final ring = LiveEegRingBuffer(
         channelCount: 2,
         windowSamples: 4,
@@ -68,7 +58,7 @@ void main() {
             values: [i.toDouble(), (i * 10).toDouble()],
             receiveMonoUs: i * 10000,
             wallClock: DateTime.fromMillisecondsSinceEpoch(i * 10),
-            contactQuality: i * 15,
+            contactQualityGrades: [i.isEven ? 4 : 1, 2],
           ),
         );
       }
@@ -76,13 +66,14 @@ void main() {
       expect(ring.length, 4);
       expect(ring.readChannelChronological(0), [3.0, 4.0, 5.0, 6.0]);
       expect(ring.readChannelChronological(1), [30.0, 40.0, 50.0, 60.0]);
-      expect(ring.latestContactQuality, 90);
+      expect(ring.latestChannelGrades, [4, 2]);
+      expect(ring.latestOverallCq, 75);
 
       final snap = ring.snapshot();
       expect(snap.sampleCount, 4);
       expect(snap.downsampledChannels.length, 2);
       expect(snap.downsampledChannels[0], [3.0, 4.0, 5.0, 6.0]);
-      expect(snap.latestTier, ContactQualityTier.good);
+      expect(snap.latestTier, ContactQualityTier.excellent);
     });
 
     test('LTTB downsampler preserves endpoints and spike extrema', () {
@@ -90,8 +81,8 @@ void main() {
       for (var i = 0; i < raw.length; i++) {
         raw[i] = math.sin(i * 0.05);
       }
-      raw[77] = 50.0; // sharp positive spike
-      raw[143] = -42.0; // sharp negative spike
+      raw[77] = 50.0;
+      raw[143] = -42.0;
 
       final ds = LiveEegRingBuffer.lttbDownsampleUniform(raw, raw.length, 24);
       expect(ds.length, 24);
@@ -101,58 +92,40 @@ void main() {
       expect(ds, contains(-42.0));
     });
 
-    test('CQ history commits completed bins immutably without retroactive mutation', () {
+    test('commits per-channel CQ history bins immutably without retroactive mutation', () {
       final ring = LiveEegRingBuffer(
         channelCount: 2,
         windowSamples: 16,
         targetDrawPoints: 8,
-        cqBinDurationUs: 100000, // 100 ms bins
+        cqBinDurationUs: 100000,
         cqHistoryBins: 8,
       );
 
-      void pushAt(int monoUs, int cq) {
+      void pushAt(int monoUs, List<int> grades) {
         ring.push(
           EegSample(
             values: const [1.0, 2.0],
             receiveMonoUs: monoUs,
             wallClock: DateTime.fromMicrosecondsSinceEpoch(monoUs),
-            contactQuality: cq,
+            contactQualityGrades: grades,
           ),
         );
       }
 
-      // Bin 0: poor (10)
-      pushAt(10000, 10);
-      pushAt(50000, 20);
+      // Bin 0: ch0 = poor(1), ch1 = fair(2)
+      pushAt(10000, const [1, 2]);
       final snap0 = ring.snapshot();
-      expect(snap0.cqHistoryTiers, [ContactQualityTier.poor.index_]);
+      expect(snap0.cqHistoryChannelTiers, [1, 2]);
 
-      // Advance to bin 1: fair (40). Bin 0 is now committed as poor.
-      pushAt(120000, 40);
+      // Bin 1: ch0 = excellent(4), ch1 = poor(1). Bin 0 stays [1, 2].
+      pushAt(120000, const [4, 1]);
       final snap1 = ring.snapshot();
-      expect(snap1.cqHistoryTiers, [
-        ContactQualityTier.poor.index_,
-        ContactQualityTier.fair.index_,
-      ]);
+      expect(snap1.cqHistoryChannelTiers, [1, 2, 4, 1]);
 
-      // Advance to bin 2: excellent (110). Past bins [poor, fair] stay identical.
-      pushAt(230000, 110);
-      final snap2 = ring.snapshot();
-      expect(snap2.cqHistoryTiers, [
-        ContactQualityTier.poor.index_,
-        ContactQualityTier.fair.index_,
-        ContactQualityTier.excellent.index_,
-      ]);
-
-      // Update within bin 2 to good (70): only the live rightmost cell changes;
-      // committed history [poor, fair] is untouched.
-      pushAt(280000, 70);
-      final snap2b = ring.snapshot();
-      expect(snap2b.cqHistoryTiers, [
-        ContactQualityTier.poor.index_,
-        ContactQualityTier.fair.index_,
-        ContactQualityTier.good.index_,
-      ]);
+      // Update within bin 1: only live rightmost bin mutates; bin 0 untouched!
+      pushAt(180000, const [4, 4]);
+      final snap1b = ring.snapshot();
+      expect(snap1b.cqHistoryChannelTiers, [1, 2, 4, 4]);
     });
 
     test('clear resets ring samples and CQ history', () {
@@ -166,14 +139,17 @@ void main() {
           values: const [5.0, 6.0],
           receiveMonoUs: 300000,
           wallClock: DateTime.fromMillisecondsSinceEpoch(300),
-          contactQuality: 100,
+          contactQualityGrades: const [4, 4],
+          overallCq: 100,
         ),
       );
       expect(ring.length, 1);
       ring.clear();
       expect(ring.length, 0);
-      expect(ring.latestContactQuality, 0);
+      expect(ring.latestOverallCq, 0);
+      expect(ring.latestChannelGrades, [0, 0]);
       expect(ring.snapshot().cqHistoryTiers, isEmpty);
+      expect(ring.snapshot().cqHistoryChannelTiers, isEmpty);
     });
   });
 
@@ -191,45 +167,56 @@ void main() {
   });
 
   group('Plot widgets smoke', () {
-    testWidgets('EegStackedLanePlot, ContactQualityHeadMap, and ContactQualityHistoryStrip build with synthetic ring data',
-        (tester) async {
-      final ring = LiveEegRingBuffer();
-      for (var i = 0; i < 200; i++) {
-        ring.push(
-          EegSample(
-            values: List<double>.generate(
-              EegSample.channelCount,
-              (ch) => 40.0 * math.sin((i + ch * 5) * 0.12),
+    testWidgets(
+      'EegStackedLanePlot, ContactQualityHeadMap, and ContactQualityHistoryStrip render per-electrode CQ',
+      (tester) async {
+        final ring = LiveEegRingBuffer();
+        for (var i = 0; i < 200; i++) {
+          ring.push(
+            EegSample(
+              values: List<double>.generate(
+                EegSample.channelCount,
+                (ch) => 40.0 * math.sin((i + ch * 5) * 0.12),
+              ),
+              receiveMonoUs: i * 7812,
+              wallClock: DateTime.fromMillisecondsSinceEpoch(1000 + i * 8),
+              contactQualityGrades: List<int>.generate(
+                EegSample.channelCount,
+                (ch) => (ch % 3 == 0) ? 4 : ((ch % 3 == 1) ? 2 : 1),
+              ),
             ),
-            receiveMonoUs: i * 7812,
-            wallClock: DateTime.fromMillisecondsSinceEpoch(1000 + i * 8),
-            contactQuality: (i < 64) ? 25 : (i < 128 ? 55 : 108),
-          ),
-        );
-      }
-      final snap = ring.snapshot();
+          );
+        }
+        final snap = ring.snapshot();
 
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: SingleChildScrollView(
-              child: Column(
-                children: [
-                  EegStackedLanePlot(snapshot: snap),
-                  ContactQualityHistoryStrip(cqHistoryTiers: snap.cqHistoryTiers),
-                  ContactQualityHeadMap(contactQuality: snap.latestContactQuality),
-                ],
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SingleChildScrollView(
+                child: Column(
+                  children: [
+                    EegStackedLanePlot(snapshot: snap),
+                    ContactQualityHistoryStrip(
+                      cqHistoryTiers: snap.cqHistoryTiers,
+                      cqHistoryChannelTiers: snap.cqHistoryChannelTiers,
+                    ),
+                    ContactQualityHeadMap(
+                      channelGrades: snap.latestChannelGrades,
+                      overallCq: snap.latestOverallCq,
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
-        ),
-      );
-      await tester.pump();
+        );
+        await tester.pump();
 
-      expect(find.byType(EegStackedLanePlot), findsOneWidget);
-      expect(find.byType(ContactQualityHistoryStrip), findsOneWidget);
-      expect(find.byType(ContactQualityHeadMap), findsOneWidget);
-      expect(find.text('Excellent'), findsOneWidget);
-    });
+        expect(find.byType(EegStackedLanePlot), findsOneWidget);
+        expect(find.byType(ContactQualityHistoryStrip), findsOneWidget);
+        expect(find.byType(ContactQualityHeadMap), findsOneWidget);
+        expect(find.text('Excellent'), findsOneWidget);
+      },
+    );
   });
 }

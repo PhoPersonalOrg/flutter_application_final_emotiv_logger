@@ -49,20 +49,22 @@ void main() {
     hub.dispose();
   });
 
-  test('EegSample eQuality metadata and broadcast CQ vector match LSL schema', () {
+  test('EegSample per-electrode eQuality metadata and vector match LSL schema', () {
     expect(EegSample.qualityStreamName, 'Epoc X eQuality');
     expect(EegSample.qualityStreamType, 'Raw');
     expect(EegSample.qualityChannelNames.length, 14);
     expect(EegSample.qualityChannelNames.first, 'qAF3');
     expect(EegSample.qualityChannelNames.last, 'qAF4');
+    expect(MotionSample.nominalRateHz, 32.0);
 
     final defaultSample = EegSample(
       values: List<double>.filled(14, 1.5),
       receiveMonoUs: 10,
       wallClock: DateTime.fromMillisecondsSinceEpoch(10),
     );
-    expect(defaultSample.qualityBroadcastValues(), List<double>.filled(14, 0.0));
+    expect(defaultSample.qualityValues(), List<double>.filled(14, 0.0));
 
+    const grades = [4, 2, 1, 0, 4, 4, 2, 1, 0, 4, 2, 4, 1, 4];
     var health = const AcquisitionHealth();
     final hub = SampleHub(onHealth: (fn) => health = fn(health));
     hub.publishDecode(
@@ -71,16 +73,16 @@ void main() {
           values: List<double>.filled(14, 2.5),
           receiveMonoUs: 42,
           wallClock: DateTime.fromMillisecondsSinceEpoch(42),
-          contactQuality: 0x2B,
+          contactQualityGrades: grades,
+          overallCq: 57,
         ),
       ),
     );
 
     final drained = hub.takeLslEeg();
     expect(drained, hasLength(1));
-    final cqVec = drained.single.qualityBroadcastValues();
-    expect(cqVec, hasLength(EegSample.channelCount));
-    expect(cqVec, everyElement(43.0));
+    final cqVec = drained.single.qualityValues();
+    expect(cqVec, grades.map((g) => g.toDouble()).toList());
     hub.dispose();
   });
 
@@ -93,7 +95,7 @@ void main() {
   });
 
   test(
-    'LslSink publishes Epoc X, Epoc X Motion, and Epoc X eQuality with custom hostname',
+    'LslSink publishes Epoc X, Epoc X Motion (32 Hz), and per-electrode Epoc X eQuality',
     () async {
       var health = const AcquisitionHealth();
       final hub = SampleHub(onHealth: (fn) => health = fn(health));
@@ -104,9 +106,11 @@ void main() {
         enabled: true,
         sourceId: sourceId,
         hostname: 'iPhone',
+        eegRateHz: 256.0,
+        motionRateHz: 32.0,
       );
       expect(status, LslSubsystemStatus.active);
-      expect(health.lslMessage, contains('(iPhone)'));
+      expect(health.lslMessage, contains('(iPhone'));
 
       final resolved = await LSL.resolveStreamsByProperty(
         property: LSLStreamProperty.sourceId,
@@ -122,23 +126,24 @@ void main() {
           byName.keys,
           containsAll(['Epoc X', 'Epoc X Motion', 'Epoc X eQuality']),
         );
-        for (final name in ['Epoc X', 'Epoc X Motion', 'Epoc X eQuality']) {
-          expect(byName[name]!.hostname, 'iPhone');
-        }
+        expect(byName['Epoc X']!.sampleRate, 256.0);
+        expect(byName['Epoc X eQuality']!.sampleRate, 256.0);
+        expect(byName['Epoc X Motion']!.sampleRate, 32.0);
 
-        // Verify an inlet can connect and receive broadcast CQ despite custom hostname.
         final eqInlet = await LSL.createInlet<double>(
           streamInfo: byName['Epoc X eQuality']!,
           createTimeout: 3.0,
         );
         try {
+          const grades = [4, 2, 1, 0, 4, 2, 1, 0, 4, 2, 1, 0, 4, 4];
           hub.publishDecode(
             DecodeEegOk(
               EegSample(
                 values: List<double>.filled(14, 12.5),
                 receiveMonoUs: 100,
                 wallClock: DateTime.fromMillisecondsSinceEpoch(100),
-                contactQuality: 0x5A,
+                contactQualityGrades: grades,
+                overallCq: 52,
               ),
             ),
           );
@@ -146,7 +151,9 @@ void main() {
           final pulled = await eqInlet.pullSample(timeout: 3.0);
           expect(pulled.errorCode, 0);
           expect(pulled.data, hasLength(14));
-          expect(pulled.data, everyElement(closeTo(90.0, 1e-5)));
+          for (var i = 0; i < 14; i++) {
+            expect(pulled.data[i], closeTo(grades[i].toDouble(), 1e-5));
+          }
         } finally {
           await eqInlet.destroy();
         }

@@ -1,20 +1,37 @@
 # Emotiv Acquisition Logger
 
-Flutter app that reliably acquires Emotiv Epoc X / Epoc+ EEG and motion over BLE, with **CSV + LSL as first-class sinks**. Network NDJSON streaming is optional and best-effort.
+Flutter app that acquires Emotiv **EPOC X** 14-channel EEG, 9-axis Motion/IMU, per-electrode Contact Quality (`CQ`), Battery, and Hardware Trigger (`marker_hw`) over BLE GATT (`81072f40-9f3d-11e3-a9dc-0002a5d5c51b`), with **CSV + LSL as first-class sinks** and clean-room parity against `CortexService.exe` (`4.8.16.1`).
 
 ## Architecture (acquisition-first)
 
 ```
-Headset BLE → AcquisitionSession (FSM)
-                → DecodePipeline (isolate)
-                → SampleHub (bounded queues)
-                     ├─ CsvSink      (first-class)
-                     ├─ LslSink      (first-class; Degraded if native lib fails)
-                     ├─ NetworkSink  (best-effort, never backpressures BLE)
-                     └─ UI preview   (throttled)
+Headset BLE (81072f40 + DIS 0x180A)
+  → AcquisitionSession (Active Scan, ATT_MTU >= 87, High Priority, FSM)
+  → DecodePipeline (Isolate: 64B/84B Split, V2 AES-128 / V4 AES-256, CQ & Battery Demux)
+  → SampleHub (bounded queues)
+       ├─ CsvSink      (first-class: session.json, eeg.csv, motion.csv, cq.csv, raw.csv)
+       ├─ LslSink      (first-class: Epoc X, Epoc X eQuality, Epoc X Motion)
+       ├─ NetworkSink  (best-effort NDJSON UDP/TCP, never backpressures BLE)
+       └─ UI preview   (throttled 14-ch plot + per-electrode scalp CQ map & history strip)
 ```
 
 Explicit states: `Idle → Scanning → Connecting → Preparing → Streaming`, with `Reconnecting` / `Stopping` / `Failed`. Subscriptions are cancelled as a bag on every session exit; teardown is awaited in order (stop packets → cancel notifies → flush CSV → close LSL → disconnect).
+
+## BLE Protocol & Codec Summary
+
+- **Active Scanning:** Physical EPOC X places `"EPOCX (<8HEX>)"` (`AD 0x09`) in `ADV_IND` and places `81072f40-9f3d-11e3-a9dc-0002a5d5c51b` (`AD 0x07`) in `SCAN_RSP`. Active scanning (`SCAN_REQ`) is enabled automatically.
+- **Link Negotiation & GATT Reads:** Requests `ATT_MTU >= 87` (`247` requested on Android; headset locks `87` for `84B` super-frames) and `ConnectionPriority.high` (`7.5–10 ms` interval). Reads DIS `0x2A25` (`5` binary serial bytes), DIS `0x2A26` (`2` BE firmware bytes), and `81072f44` (`6` mode configuration bytes: `128`/`256` Hz EEG, `14`/`16`-bit EEG, `0`/`32`/`64`/`128` Hz MEMS). Subscribes CCCD `01 00` on `81072f41` with **zero** unlock/challenge writes.
+- **Notification Splitting (`81072f41`, `fw > 0x0710`):**
+  - `64` bytes: `2 × 32B` encrypted EEG frames (`[0..32]`, `[32..64]`).
+  - `84` bytes (`0x54`): `2 × 32B` encrypted EEG frames + `20B` Motion/MEMS tail (`[64..84]`).
+- **Hardware Key Schedules (`V2` & `V4`):**
+  - **Version 2 (`fw <= 0x073E`):** `AES-128-ECB`, `preXor = 0x55` on `32B` EEG; `20B` BLE Motion is unencrypted pass-through.
+  - **Version 4 (`fw >= 0x073F`):** `AES-256-ECB` (`SHA256("Vohcha7e" + S8[0..4] + "Ut3phaej" + S8[4..8] + fwHex4)`), `preXor = 0x14` on `32B` EEG, and `16B AES-256-ECB + 4B XOR 0x14` on `20B` BLE Motion.
+- **EEG, Per-Electrode CQ, Battery & IMU Orientation:**
+  - **EEG (`uV`):** `15 × uint16 LE` unpacked in 10-20 order (`AF3..AF4`), scaled by `÷7.8` (`16`-bit) or `÷1.95` (`14`-bit), plus `marker_hw = (P[1] >> 7) & 1`.
+  - **In-Band Battery:** Latched strictly on `counter == eegRateHz - 1` (`127` @ `128 Hz`, `255` @ `256 Hz`) when `words[7] != 0`: `batteryPct = clamp(words[7] & 0x7F, 0, 100)`.
+  - **Per-Electrode CQ:** Demultiplexed via `slot = counter % (eegRateHz ~/ 2)` (`0..13`) in ASIC order (`F3..F4`) using `(0.25 * words[7]) / CQ_SCALE[slot]` into discrete Cortex grades (`0, 1, 2, 4`), held across each `0.5 s` (`2 Hz`) cycle and emitted in `AF3..AF4` order.
+  - **Motion/IMU (`Q0..Q3, AccX..Z, MagX..Z`):** Configurable `Headband orientation` in Settings (`Top of head` default axis swap/negation vs. `Back of head` identity).
 
 ## Session files
 
@@ -22,172 +39,42 @@ Each connect creates (CSV/`raw.csv` is **always on** when the session folder ope
 
 ```
 {saveDir}/session_{iso}/
-  session.json   # device_id, app_version_name, startedAt, gps, deviceName, btKeyHex, …
-  eeg.csv        # wall_ms, mono_us, AF3…AF4
-  motion.csv     # wall_ms, mono_us, Q0…Q3, AccX/Y/Z, MagX/Y/Z
+  session.json   # btKeyHex, disSerialHex, headsetFirmwareHex, cryptoVersion, headsetConfigHex, rates, …
+  eeg.csv        # wall_ms, mono_us, counter, marker_hw, AF3…AF4
+  motion.csv     # wall_ms, mono_us, counter_mems, Q0…Q3, AccX/Y/Z, MagX/Y/Z
+  cq.csv         # wall_ms, mono_us, counter, overall_cq, battery_pct, qAF3…qAF4
   raw.csv        # wall_ms, mono_us, kind, char_uuid, bytes
 ```
 
-`raw.csv` stores undecrypted BLE notify payloads **before** length/kind gates used for live decode. `kind` is advisory (from the subscribed characteristic); `char_uuid` is the GATT UUID; `bytes` are space-separated decimals. Short or misclassified packets are still written so they can be re-decoded offline.
-
-Timestamps are receive-time (headset clock is not available on this BLE path).
-
-### Offline re-decode
-
-After transferring a session folder, use emotiv-lsl:
-
-```bash
-cd ../ACTIVE_DEV/emotiv-lsl
-.venv/bin/python scripts/decode_flutter_raw_csv.py /path/to/session_…
-# optional replay dump:
-.venv/bin/python scripts/decode_flutter_raw_csv.py /path/to/session_… \
-  -o /path/to/session_…/replay.epocxwire
-```
-
-That writes `eeg_offline.csv` / `motion_offline.csv` (classification by payload length) and can emit `.epocxwire` for `main.py --replay`.
-
-Cross-client EEG parity (Flutter session → wire → Python / optional C++ LSL) lives in sibling **emotiv-lsl**:
-
-```bash
-cd ../emotiv-lsl
-python -m tests.test_client_compat_flutter
-python -m tests.test_client_compat_inventory   # documents Flutter LSL divergences
-```
-
-In-app Mode-7 crypto gate: `flutter test test/crypto_codec_test.dart`.
-
-## Sessions tab (transfer)
-
-Bottom nav **Sessions** lists prior `session_*` folders. Multi-select and transfer over **SFTP** (`dartssh2`), **SMB** (`dart_smb2`), or **Dropbox** (App Folder) to a remembered destination. Server bookmarks store host/user/path in SharedPreferences (optional password in secure storage). The live recording folder is not transferable/deletable while acquisition is open. SFTP over Tailscale is the usual path; SMB on LAN may need Local Network permission on iOS.
-
-### Live Dropbox / SMB sync
-
-While recording, the app can **incrementally push** growing `eeg.csv` / `motion.csv` / `raw.csv` (plus `session.json`) to configured destinations:
-
-- **Dropbox** (App Folder): Settings → **Connect Dropbox**, **Live sync while recording** (default on when linked), folder under App Folder (default `EmotivSessions`). Bytes append during capture; Dropbox files are **committed on Stop**.
-- **SMB**: Bookmarks → enable **Live sync while recording** (default on) with a **remembered password**. Multiple SMB bookmarks can sync in parallel with Dropbox.
-
-Sessions → Transfer remains available for manual catch-up uploads (SFTP/SMB/Dropbox).
-
-1. Create an app at https://www.dropbox.com/developers/apps  
-   - Scoped access · **App folder** · name e.g. `Emotiv Logger`
-2. Permissions: `files.content.write`, `files.content.read`, `files.metadata.write`, `files.metadata.read`
-3. Copy the **App key**
-4. Replace `YOUR_DROPBOX_APP_KEY` in:
-   - [`ios/Runner/Info.plist`](ios/Runner/Info.plist) (`db-YOUR_DROPBOX_APP_KEY`)
-   - [`android/app/src/main/AndroidManifest.xml`](android/app/src/main/AndroidManifest.xml) (`db-YOUR_DROPBOX_APP_KEY`)
-5. Copy [`.env.example`](.env.example) → `.env` (gitignored) and set the same key:
-
-```bash
-cp .env.example .env
-# edit .env: DROPBOX_APP_KEY=<key>
-```
-
-6. Prefer release so iOS can be relaunched from the home screen without a debugger:
-
-```bash
-./scripts/run_release.sh
-# optional device:
-./scripts/run_release.sh -d <deviceId>
-```
-
-Or pass defines manually (debug or release):
-
-```bash
-fvm flutter run \
-  --dart-define=DROPBOX_APP_KEY=<key> \
-  --dart-define=DROPBOX_CLIENT_ID=emotiv-logger
-```
-
-PKCE is used; do **not** embed an app secret in the client.
-
-On iOS, OAuth returns via the `db-<key>://` URL scheme. The app disables Flutter deep linking for those URLs and handles them in `DropboxFlutterSceneDelegate` / `AppDelegate` so Dropbox can finish PKCE. After tapping Connect, keep the app open until authorization completes (the UI polls for credentials).
-
-## Decoding
-
-Packet layouts, channel order and scale factors follow the EmotivPRO V4 Android library (see `lib/decode/crypto_codec.dart` for the function each one was read from).
-
-- **EEG**: 32-byte packages, XOR `0x55` + AES-128-ECB. ADC divisor comes from the headset config characteristic when present (`/1.95` for 14-bit, `/7.8` for 16-bit); otherwise defaults to 16-bit.
-- **Motion**: 20-byte unencrypted packages holding an orientation quaternion, accelerometer (g) and magnetometer. There is no gyroscope data in the Epoc X motion package.
-- **Not supported**: headset firmware newer than `0x73e` (AES-256 keying) and headsets switched to legacy EPOC mode. Both decrypt to noise; the Health card shows a warning when the EEG package counters stop being sequential. `raw.csv` always keeps the undecrypted packets.
+`raw.csv` stores undecrypted BLE notify payloads (`64B` / `84B` / `20B`) **before** split/decrypt gates. `btKeyHex` (`8`-char uppercase hex) and `serialSource: "ble_hex"` are preserved alongside `disSerialHex` (`10`-char hex from `0x2A25`) and `headsetFirmwareHex` for backward-compatible offline replay.
 
 ## LSL
 
-In-process outlets via vendored `liblsl` (`packages/liblsl`), advertising the configured **Hostname** from Settings (default `iPhone`, shown in LabRecorder as `Epoc X (iPhone)`):
+In-process outlets via vendored `liblsl` (`packages/liblsl`), advertising the configured **Hostname** from Settings (default `iPhone`, shown in LabRecorder as `Epoc X (iPhone)`) at the active rates reported by `81072f44`:
 
 | Stream | Type | Channels | Rate |
 |--------|------|----------|------|
-| Epoc X | EEG | 14 | 128 Hz |
-| Epoc X Motion | Accelerometer | 10 (Q0–Q3, Acc XYZ, Mag XYZ) | 16 Hz |
-| Epoc X eQuality | Raw | 14 (broadcast Mode-7 CQ 0–127) | 128 Hz |
+| Epoc X | EEG | 14 (`AF3..AF4`, `uV`) | `128` or `256` Hz |
+| Epoc X Motion | Accelerometer | 10 (`Q0–Q3`, `Acc XYZ`, `Mag XYZ`) | `32` / `64` / `128` Hz |
+| Epoc X eQuality | Raw | 14 (`qAF3..qAF4`, per-electrode Cortex CQ `0, 1, 2, 4`) | `128` or `256` Hz |
 
-If outlet creation fails (e.g. Android `liblsl.so`), LSL becomes **Degraded** and acquisition + CSV continue.
+If outlet creation fails (e.g. missing native `liblsl`), LSL becomes **Degraded** and acquisition + CSV continue.
 
-## Network streaming (optional)
-
-Settings → enable network stream (UDP/TCP NDJSON). Failures never pause BLE.
-
-Companion receiver:
+## Tests & Ground-Truth Verification
 
 ```bash
-python EXTERNAL/SCRIPTS/test_reciever.py --port 9878
-# optional LSL rebroadcast:
-pip install pylsl
-python EXTERNAL/SCRIPTS/test_reciever.py --lsl --port 9878
+fvm flutter analyze
+fvm flutter test
 ```
 
-## Setup (macOS)
+## Sessions tab & Live Dropbox / SMB / SFTP sync
+
+While recording, the app incrementally pushes growing `eeg.csv`, `motion.csv`, `cq.csv`, and `raw.csv` (plus `session.json`) to configured Dropbox, SMB, and SFTP destinations without blocking BLE capture.
+
+## Setup & Build
 
 ```bash
-brew tap leoafarias/fvm
-brew install fvm
-fvm install 3.47.9
 fvm use 3.47.9
 fvm flutter pub get
-```
-
-Android builds require **JDK 17+** (Java 25 works with this project's Gradle **9.3.1** / AGP **9.1.1**). Prefer `fvm flutter` so the pin matches the build.
-
-## Codemagic iOS build numbers
-
-App Store Connect rejects uploads that reuse `CFBundleVersion` (the `+N` in `pubspec.yaml` `version: x.y.z+N`). Bump happens automatically when the Codemagic **iOS+Deploy** workflow runs this pre-build script:
-
-1. Codemagic → app → **Environment variables** → add `APP_APPLE_ID` (App Store Connect → your app → **App Information** → **Apple ID**). Do **not** set `FLUTTER_BUILD_NUMBER` or `FLUTTER_BUILD_NAME` as env vars — Flutter reserves them and aborts the build.
-2. Workflow **iOS+Deploy** → **Build** → **Pre-build script**:
-
-```bash
-chmod +x scripts/codemagic_bump_build_number.sh
-./scripts/codemagic_bump_build_number.sh
-```
-
-3. Flutter build arguments (recommended): `--build-number=$NEW_BUILD_NUMBER --dart-define=BUILD_TIME=$BUILD_TIME`
-
-The script sets `NEW_BUILD_NUMBER` to `max(ASC/TestFlight latest+1, PROJECT_BUILD_NUMBER/BUILD_NUMBER, pubspec+1)`, writes it and `BUILD_TIME` (UTC ISO-8601 for the Record-screen build caption) to `$CM_ENV`, and rewrites `pubspec.yaml`’s `+N` in the CI workspace so the IPA still bumps even if the Flutter build-args field is missing. ASC queries use `--all-versions` so a higher build on an older marketing version still floors the next number.
-
-**Verify a green build actually bumped:** in the Codemagic log, find `Using build number:` / `Updated pubspec.yaml version to` and confirm TestFlight shows that `CFBundleVersion`. If you see `Skipping ASC lookup`, add `APP_APPLE_ID`.
-
-## Build / run
-
-Use the status-bar Flutter device picker for the target, then:
-
-```bash
-# Release + Dropbox keys from .env (recommended for physical iOS):
 ./scripts/run_release.sh
-./scripts/run_release.sh -d <deviceId>
-
-fvm flutter run
-# with Dropbox (after creating an App Folder app — see above):
-fvm flutter run --dart-define-from-file=.env
-# or manually:
-fvm flutter run --dart-define=DROPBOX_APP_KEY=<key>
-# Pixel 2 example:
-fvm flutter run -d FA7B71A02109
-# or workspace Action Buttons: Run Device / Debug Device / Build iOS
-# (Build iOS uses --release --dart-define-from-file=.env)
 ```
-
-iOS simulator builds work for UI only; **real headset acquisition requires a physical device**. Debug installs often stop working once the debugger disconnects; use `./scripts/run_release.sh` or the release launch config for a home-screen-launchable build.
-
-## Health UI
-
-Record tab shows acquisition state, EEG/motion Hz, decode failures, gap count, CSV/LSL drop counts, LSL status, and session path.
